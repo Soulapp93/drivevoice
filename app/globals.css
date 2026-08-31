@@ -1,0 +1,35 @@
+@import 'tailwindcss';
+
+:root { --background: #f5f6f1; --foreground: #172019; }
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+button { cursor: pointer; }
+
+/* Ancien éditeur conservé uniquement pour compatibilité de données. */
+[aria-label="Éditeur de produit"] { display: none !important; }
+
+.wave-bar { animation: sound-wave .8s ease-in-out infinite alternate; }
+.wave-bar:nth-child(2n) { animation-delay: -.35s; }
+.wave-bar:nth-child(3n) { animation-delay: -.6s; }
+.voice-orb { box-shadow: 0 0 0 0 rgb(255 90 54 / 0); }
+
+@keyframes sound-wave {
+  from { transform: scaleY(.45); opacity: .6; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-bar { animation: none; }
+}
