@@ -1,7 +1,6 @@
 'use client';
 
 import { type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { useMasterBrands } from '@/lib/supabase/hooks';
 
 type ProductId = string;
 type OrderItem = { id: number; productId: ProductId; name: string; detail: string; price: number; emoji: string };
@@ -1522,7 +1521,7 @@ function RestaurantMenuBuilderPanel({ products, setProducts }: { products: Catal
 }
 
 type MasterBrand = {
-  id: string; name: string; short: string; color: string; soft: string; version: number; status: 'Publié' | 'Brouillon' | 'Archivé'; restaurants: number; updated: string; products: CatalogProduct[];
+  id: 'bk' | 'quick' | 'kfc'; name: string; short: string; color: string; soft: string; version: number; status: 'Publié' | 'Brouillon' | 'Archivé'; restaurants: number; updated: string; products: CatalogProduct[];
 };
 
 const createMasterProducts = (brand:string, rows:Array<[string,string,string,string]>, offset:number):CatalogProduct[] => rows.map(([name,category,detail,emoji],index)=>({id:offset+index,productId:`master_${brand}_${index}`,name,category,detail,emoji,price:0,posCode:'',available:true,productType:category==='Menus'?'menu':category==='Burgers'?'configurable':'simple'}));
@@ -1559,53 +1558,8 @@ const initialMasterBrands:MasterBrand[] = [
 ];
 
 function BackOfficePanel() {
-  // Charger les catalogues maîtres depuis Supabase
-  const { brands: supabaseBrands, loading: brandsLoading, error: brandsError, updateBrand: updateBrandSupabase, saveProduct: saveProductSupabase, deleteProduct: deleteProductSupabase } = useMasterBrands();
-  
-  // Convertir les données Supabase au format MasterBrand (adaptation temporaire)
-  const brands = useMemo(() =>
-    (supabaseBrands ?? []).map(brand => ({
-      id: brand.id,
-      name: brand.name,
-      short: brand.short,
-      color: brand.color,
-      soft: brand.soft,
-      version: brand.version,
-      status: brand.status as 'Brouillon' | 'Publié' | 'Archivé',
-      updated: 'À jour',
-      restaurants: 0,
-      products: (brand.products ?? []).map(p => ({
-        id: parseInt(p.id as string) || Math.floor(Math.random() * 1000000),
-        productId: p.product_id,
-        name: p.name,
-        detail: p.detail || '',
-        category: p.category,
-        subcategory: p.subcategory || '',
-        price: p.price,
-        emoji: p.emoji || '🍽️',
-        available: p.available ?? true,
-        productType: (p.product_type || 'simple') as 'simple' | 'configurable' | 'menu' | 'bundle',
-        ingredients: (typeof p.ingredients === 'string' ? JSON.parse(p.ingredients || '[]') : p.ingredients) || [],
-        ingredientSettings: (typeof p.ingredient_settings === 'string' ? JSON.parse(p.ingredient_settings || '[]') : p.ingredient_settings) || [],
-        variants: (typeof p.variants === 'string' ? JSON.parse(p.variants || '[]') : p.variants) || [],
-        optionGroups: (typeof p.option_groups === 'string' ? JSON.parse(p.option_groups || '[]') : p.option_groups) || [],
-        modifiers: (typeof p.modifiers === 'string' ? JSON.parse(p.modifiers || '[]') : p.modifiers) || [],
-        posCode: p.pos_code || '',
-        imageUrl: p.image_url || undefined,
-        slug: p.slug || undefined,
-        meatFilter: p.meat_filter || undefined,
-        badges: [],
-        ingredientImages: [],
-        allergens: [],
-        traces: [],
-        nutrition: { calories: '', fat: '', saturatedFat: '', proteins: '', carbohydrates: '', sugars: '', salt: '' },
-        displayOrder: p.display_order || 1,
-      } as any))
-    })),
-    [supabaseBrands]
-  );
-  
-  const [selectedBrandId,setSelectedBrandId]=useState<string|null>(null);
+  const [brands,setBrands]=useState<MasterBrand[]>(initialMasterBrands);
+  const [selectedBrandId,setSelectedBrandId]=useState<MasterBrand['id']|null>(null);
   const [view,setView]=useState<'catalog'|'versions'|'restaurants'>('catalog');
   const [category,setCategory]=useState('Toutes');
   const [query,setQuery]=useState('');
@@ -1618,14 +1572,7 @@ function BackOfficePanel() {
   const brand=brands.find(item=>item.id===selectedBrandId)??null;
   const categories=brand?Array.from(new Set(brand.products.map(product=>product.category))):[];
   const displayed=brand?brand.products.filter(product=>(category==='Toutes'||product.category===category)&&`${product.name} ${product.detail}`.toLowerCase().includes(query.toLowerCase())):[];
-  
-  // Note: updateBrand est maintenant déporté à Supabase. Cette fonction devient un no-op pour le layout local.
-  const updateBrand=(id: string, patch: Partial<MasterBrand>) => {
-    if (patch.status || patch.version) {
-      updateBrandSupabase(id, { status: patch.status as any, version: patch.version });
-    }
-  };
-  
+  const updateBrand=(id:MasterBrand['id'],patch:Partial<MasterBrand>)=>setBrands(current=>current.map(item=>item.id===id?{...item,...patch}:item));
   const publish=()=>{if(!brand)return;updateBrand(brand.id,{version:brand.version+1,status:'Publié',updated:'À l\'instant'});setNotice(`✓ Version v${brand.version+1} publiée et prête pour les restaurants ${brand.short}.`);window.setTimeout(()=>setNotice(''),3200);};
   const archive=()=>{if(!brand)return;updateBrand(brand.id,{status:'Archivé',updated:'À l\'instant'});setNotice('Catalogue archivé. Les restaurants conservent leur dernière version publiée.');};
   const startCreate=()=>{const defaultCategory=category==='Toutes'?(categories[0]??'Menus'):category;setDraft({name:'',detail:'',category:defaultCategory,subcategory:subcategoryTemplates[defaultCategory]?.[1]??'',price:0,posCode:'',emoji:'🍽️',ingredients:[],available:true,productType:defaultCategory==='Menus'?'menu':'simple',variants:[],optionGroups:[],modifiers:[],imageUrl:'',slug:'',meatFilter:'',badges:'',ingredientImages:'',allergens:'',traces:'',displayOrder:brand?.products.length?brand.products.length+1:1,nutrition:{calories:'',fat:'',saturatedFat:'',proteins:'',carbohydrates:'',sugars:'',salt:''}});setCreatingProduct(true);setEditingProduct(null);setNewIngredient('');};
@@ -1633,7 +1580,7 @@ function BackOfficePanel() {
   const addIngredient=()=>{const name=newIngredient.trim();if(!name)return;setDraft(current=>({...current,ingredients:[...current.ingredients,{id:Date.now(),name,removable:true,extraAllowed:true,extraPrice:0}]}));setNewIngredient('');};
   const updateIngredient=(id:number,patch:Partial<ProductIngredient>)=>setDraft(current=>({...current,ingredients:current.ingredients.map((ingredient:ProductIngredient)=>ingredient.id===id?{...ingredient,...patch}:ingredient)}));
   const moveIngredient=(index:number,direction:-1|1)=>setDraft(current=>{const target=index+direction;if(target<0||target>=current.ingredients.length)return current;const ingredients=[...current.ingredients];[ingredients[index],ingredients[target]]=[ingredients[target],ingredients[index]];return {...current,ingredients};});
-  const saveProduct=()=>{if(!brand||!draft.name.trim()||draft.price<0)return;const ingredientSettings=draft.category!=='Menus'&&draft.category!=='Menus enfants'?(draft.ingredients as ProductIngredient[]).filter(ingredient=>ingredient.name.trim()).map(ingredient=>({...ingredient,name:ingredient.name.trim()})):[];const ingredients=ingredientSettings.map(ingredient=>ingredient.name);const ingredientModifiers:ProductModifier[]=ingredientSettings.flatMap(ingredient=>[...(ingredient.removable?[{id:ingredient.id*10+1,name:`Sans ${ingredient.name}`,kind:'remove' as const,priceDelta:0}]:[]),...(ingredient.extraAllowed?[{id:ingredient.id*10+2,name:`Supplément ${ingredient.name}`,kind:'add' as const,priceDelta:ingredient.extraPrice}]:[])]);const nextProduct={name:draft.name.trim(),detail:draft.detail.trim(),category:draft.category,subcategory:draft.subcategory||undefined,price:draft.price,posCode:draft.posCode.trim(),emoji:draft.emoji||'🍽️',imageUrl:draft.imageUrl.trim()||undefined,ingredients,ingredientSettings,available:draft.available,productType:draft.productType,variants:draft.variants,optionGroups:draft.optionGroups,modifiers:ingredientModifiers,slug:draft.slug.trim()||undefined,meatFilter:draft.meatFilter.trim()||undefined,badges:splitField(draft.badges),ingredientImages:splitField(draft.ingredientImages),allergens:splitField(draft.allergens),traces:splitField(draft.traces),displayOrder:draft.displayOrder,nutrition:draft.nutrition};if(editingProduct){saveProductSupabase(brand.id,{id:editingProduct.id,...nextProduct} as any);}else{saveProductSupabase(brand.id,{id:Date.now(),productId:`master_${brand.id}_${Date.now()}`,...nextProduct} as any);}setEditingProduct(null);setCreatingProduct(false);};
+  const saveProduct=()=>{if(!brand||!draft.name.trim()||draft.price<0)return;const ingredientSettings=draft.category!=='Menus'&&draft.category!=='Menus enfants'?(draft.ingredients as ProductIngredient[]).filter(ingredient=>ingredient.name.trim()).map(ingredient=>({...ingredient,name:ingredient.name.trim()})):[];const ingredients=ingredientSettings.map(ingredient=>ingredient.name);const ingredientModifiers:ProductModifier[]=ingredientSettings.flatMap(ingredient=>[...(ingredient.removable?[{id:ingredient.id*10+1,name:`Sans ${ingredient.name}`,kind:'remove' as const,priceDelta:0}]:[]),...(ingredient.extraAllowed?[{id:ingredient.id*10+2,name:`Supplément ${ingredient.name}`,kind:'add' as const,priceDelta:ingredient.extraPrice}]:[])]);const nextProduct={name:draft.name.trim(),detail:draft.detail.trim(),category:draft.category,subcategory:draft.subcategory||undefined,price:draft.price,posCode:draft.posCode.trim(),emoji:draft.emoji||'🍽️',imageUrl:draft.imageUrl.trim()||undefined,ingredients,ingredientSettings,available:draft.available,productType:draft.productType,variants:draft.variants,optionGroups:draft.optionGroups,modifiers:ingredientModifiers,slug:draft.slug.trim()||undefined,meatFilter:draft.meatFilter.trim()||undefined,badges:splitField(draft.badges),ingredientImages:splitField(draft.ingredientImages),allergens:splitField(draft.allergens),traces:splitField(draft.traces),displayOrder:draft.displayOrder,nutrition:draft.nutrition};const products=editingProduct?brand.products.map(product=>product.id===editingProduct.id?{...product,...nextProduct}:product):[...brand.products,{id:Date.now(),productId:`master_${brand.id}_${Date.now()}`,...nextProduct} as CatalogProduct];updateBrand(brand.id,{products,status:'Brouillon',updated:'Modifié à l\'instant'});setEditingProduct(null);setCreatingProduct(false);};
   const addCategory=()=>{if(!brand)return;const name=window.prompt('Nom de la nouvelle catégorie');if(!name?.trim())return;setCategory(name.trim());startCreate();setDraft(current=>({...current,category:name.trim()}));};
   if (brand && view === 'catalog') return <><MasterCatalogBrowser brand={brand} categories={categories} category={category} setCategory={setCategory} query={query} setQuery={setQuery} onBack={()=>setSelectedBrandId(null)} onEdit={startEdit} />{(creatingProduct||editingProduct)&&<IngredientProductEditor draft={draft} setDraft={setDraft} categories={categories.map((name,index)=>({id:index+1,name,icon:'',enabled:true}))} catalogProducts={brand.products} subcategoryOptions={subcategoryTemplates[draft.category]??[]} newIngredient={newIngredient} setNewIngredient={setNewIngredient} addIngredient={addIngredient} updateIngredient={updateIngredient} moveIngredient={moveIngredient} onClose={()=>{setCreatingProduct(false);setEditingProduct(null);}} onSave={saveProduct} onDelete={editingProduct?()=>{if(window.confirm('Supprimer définitivement ce produit ?')){updateBrand(brand.id,{products:brand.products.filter(product=>product.id!==editingProduct.id),status:'Brouillon',updated:'Supprimé à l’instant'});setEditingProduct(null);}}:undefined} isNew={creatingProduct} />}</>;
   if(!brand)return <div><SectionHeading eyebrow="Administration plateforme" title="Back-office des enseignes" description="Gérez les catalogues maîtres nationaux qui seront attribués automatiquement aux restaurants lors de leur création." action={<span className="rounded-full bg-[#fff0ec] px-4 py-2 text-[10px] font-black text-[#d84d32]">ACCÈS SUPER ADMIN</span>} /><div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[['Enseignes','3','Catalogues séparés'],['Produits maîtres',String(brands.reduce((sum,item)=>sum+item.products.length,0)),'Toutes enseignes'],['Restaurants',String(brands.reduce((sum,item)=>sum+item.restaurants,0)),'Rattachés aux catalogues'],['Publications',String(brands.filter(item=>item.status==='Publié').length),'Versions actives']].map(([label,value,detail])=><div key={label} className={`${panelCard} p-5`}><p className="text-[9px] font-black uppercase tracking-wider text-[#939b94]">{label}</p><p className="mt-2 text-2xl font-black">{value}</p><p className="mt-1 text-[10px] font-bold text-[#7e8780]">{detail}</p></div>)}</div><div className="grid gap-5 lg:grid-cols-3">{brands.map(item=><button key={item.id} onClick={()=>{setSelectedBrandId(item.id);setCategory('Toutes');setView('catalog');}} className="group overflow-hidden rounded-[28px] border border-[#dfe4dc] bg-white text-left shadow-sm transition hover:-translate-y-1 hover:shadow-xl"><div className="h-2" style={{background:item.color}}/><div className="p-6"><div className="flex items-start justify-between"><span className="grid h-16 w-16 place-items-center rounded-2xl text-lg font-black" style={{background:item.soft,color:item.color}}>{item.short}</span><span className={`rounded-full px-3 py-1.5 text-[9px] font-black ${item.status==='Publié'?'bg-[#e5f6e9] text-[#27894a]':'bg-[#fff5d9] text-[#a86f00]'}`}>{item.status}</span></div><h2 className="mt-5 text-xl font-black">{item.name}</h2><p className="mt-1 text-xs text-[#7f8981]">Catalogue maître France · version v{item.version}</p><div className="mt-5 grid grid-cols-3 gap-2 border-t border-[#edf0eb] pt-4 text-center"><div><strong className="block text-lg">{new Set(item.products.map(product=>product.category)).size}</strong><small className="text-[9px] text-[#8a938b]">Catégories</small></div><div><strong className="block text-lg">{item.products.length}</strong><small className="text-[9px] text-[#8a938b]">Produits</small></div><div><strong className="block text-lg">{item.restaurants}</strong><small className="text-[9px] text-[#8a938b]">Restaurants</small></div></div><span className="mt-5 flex items-center justify-between text-xs font-black" style={{color:item.color}}>Ouvrir le catalogue <span>→</span></span></div></button>)}</div></div>;
