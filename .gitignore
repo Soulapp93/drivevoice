@@ -29,6 +29,8 @@ yarn-error.log*
 
 # local environment
 .env*
+*.hubrise.com.json
+.verdent/uploads/secret_*.json
 
 # deployment and generated files
 .vercel
