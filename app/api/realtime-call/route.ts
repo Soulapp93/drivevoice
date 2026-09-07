@@ -79,8 +79,19 @@ STYLE VOCAL
     audio: {
       input: {
         transcription: {
-          model: 'gpt-transcribe',
-          language: 'fr',
+          model: 'gpt-live-transcribe',
+          languages: ['fr'],
+          delay: 'low',
+          keywords: [
+            'DriveVoice',
+            'Master des Chefs',
+            'Master Sarran Mozzarella',
+            'Master Pairet Poivre',
+            'Chicken Louisiane',
+            'Coca-Cola',
+            'frites',
+            'menu',
+          ],
           prompt: 'Commande de restauration rapide en français : burger, menu, tenders, frites, cola zéro.',
         },
         noise_reduction: { type: 'near_field' },

@@ -1,30 +1,60 @@
 'use client';
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isSupabaseConfigured } from '@/lib/supabase/client';
+import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 import { fetchBrandsFromDb, syncBrandsToDb, type MasterBrandInput } from '@/lib/supabase/sync';
 import { createRestaurant, deleteRestaurant, fetchRestaurantProducts, fetchRestaurants, updateRestaurantProduct, type RestaurantInfo, type RestaurantProductInfo } from '@/lib/supabase/restaurants';
 
 type ProductId = string;
 type OrderItem = { id: number; productId: ProductId; name: string; detail: string; price: number; emoji: string };
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
+type TranscriptMessage = { id: string; speaker: 'client' | 'agent'; text: string; status: 'partial' | 'final'; timestamp: number };
 type RealtimeEvent = {
   type: string;
   delta?: string;
   transcript?: string;
   text?: string;
+  item_id?: string;
+  response_id?: string;
   name?: string;
   arguments?: string;
   call_id?: string;
   error?: { message?: string };
   item?: {
     type?: string;
+    id?: string;
     name?: string;
     arguments?: string;
     call_id?: string;
+    id?: string;
+    role?: string;
+    item_id?: string;
     content?: Array<{ type?: string; transcript?: string; text?: string }>;
   };
 };
+
+type BrowserSpeechRecognition = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onend: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onresult: ((event: {
+    resultIndex: number;
+    results: ArrayLike<{ isFinal: boolean; 0: { transcript: string } }>;
+  }) => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+declare global {
+  interface Window {
+    SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+    webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
+  }
+}
 
 const brands = [
   { name: 'Burger King', mark: 'BK', color: '#e32725', ink: '#fff' },
@@ -61,12 +91,21 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
   const [voiceInput, setVoiceInput] = useState('');
   const [voiceError, setVoiceError] = useState('');
   const [agentText, setAgentText] = useState('Bonjour ! Je suis prêt à prendre votre commande.');
+  const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
   const [items, setItems] = useState<OrderItem[]>([]);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const outputTranscriptRef = useRef('');
+  const transcriptMessagesRef = useRef(new Map<string, TranscriptMessage>());
+  const activeClientTranscriptIdRef = useRef<string | null>(null);
+  const activeAgentTranscriptIdRef = useRef<string | null>(null);
+  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
+  const browserSpeechIdRef = useRef<string | null>(null);
+  const latestBrowserClientIdRef = useRef<string | null>(null);
+  const conversationIdRef = useRef<string | null>(null);
+  const conversationStartedAtRef = useRef<string | null>(null);
   const handledCallsRef = useRef(new Set<string>());
   const microphoneReadyRef = useRef(false);
   const nextId = useRef(1);
@@ -81,6 +120,22 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
   };
 
   const cleanupSession = () => {
+    const messages = Array.from(transcriptMessagesRef.current.values());
+    if (conversationIdRef.current && messages.length > 0) {
+      void fetch('/api/conversations/audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: conversationIdRef.current,
+          restaurantId: 'demo-bk-paris-republique',
+          startedAt: conversationStartedAtRef.current,
+          endedAt: new Date().toISOString(),
+          messages,
+        }),
+      }).catch(() => undefined);
+    }
+    speechRecognitionRef.current?.stop();
+    speechRecognitionRef.current = null;
     dataChannelRef.current?.close();
     peerRef.current?.close();
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -101,6 +156,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     const message = text.trim();
     if (!message) return false;
     setCustomerText(message);
+    upsertTranscript(`text-client-${Date.now()}`, 'client', message, 'final');
     outputTranscriptRef.current = '';
     const sent = sendEvent({
       type: 'conversation.item.create',
@@ -113,6 +169,41 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     if (sent) sendEvent({ type: 'response.create' });
     else setVoiceError("L'agent n'est pas encore connecté. Réessayez dans un instant.");
     return sent;
+  };
+
+  const upsertTranscript = (id: string, speaker: 'client' | 'agent', text: string, status: 'partial' | 'final') => {
+    const normalized = text.trim();
+    if (!normalized) return;
+    const now = Date.now();
+    for (const [existingId, existing] of transcriptMessagesRef.current.entries()) {
+      const isRecent = now - existing.timestamp < 15_000;
+      const isSameSpeaker = existing.speaker === speaker;
+      const isDuplicate = existing.text === normalized
+        || (status === 'final' && existing.status === 'partial' && (normalized.startsWith(existing.text) || existing.text.startsWith(normalized)));
+      if (existingId !== id && isRecent && isSameSpeaker && isDuplicate) {
+        transcriptMessagesRef.current.delete(existingId);
+      }
+    }
+    const existing = transcriptMessagesRef.current.get(id);
+    transcriptMessagesRef.current.set(id, {
+      id,
+      speaker,
+      text: normalized,
+      status,
+      timestamp: existing?.timestamp ?? now,
+    });
+    setTranscript(Array.from(transcriptMessagesRef.current.values()));
+  };
+
+  const appendTranscriptDelta = (id: string, speaker: 'client' | 'agent', delta: string) => {
+    const existing = transcriptMessagesRef.current.get(id);
+    const nextText = `${existing?.text === '…' ? '' : existing?.text ?? ''}${delta}`.trim();
+    if (!nextText) return;
+    upsertTranscript(id, speaker, nextText, 'partial');
+  };
+
+  const finalizeTranscript = (id: string, speaker: 'client' | 'agent', text: string) => {
+    upsertTranscript(id, speaker, text, 'final');
   };
 
   const handleOrderTool = (name: string | undefined, rawArguments: string | undefined, callId: string | undefined) => {
@@ -150,6 +241,12 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
   };
 
   const handleRealtimeEvent = (event: RealtimeEvent) => {
+    const appendTranscript = (speaker: 'client' | 'agent', text: string) => {
+      const id = speaker === 'client'
+        ? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`
+        : activeAgentTranscriptIdRef.current ?? `agent-${Date.now()}`;
+      finalizeTranscript(id, speaker, text);
+    };
     switch (event.type) {
       case 'session.created':
       case 'session.updated':
@@ -159,30 +256,83 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         setListening(microphoneReadyRef.current);
         setSpeaking(false);
         setCustomerText('…');
+        if (microphoneReadyRef.current) {
+          const id = event.item_id ?? `client-${Date.now()}`;
+          activeClientTranscriptIdRef.current = id;
+          upsertTranscript(id, 'client', '…', 'partial');
+        }
         break;
       case 'input_audio_buffer.speech_stopped':
         setListening(false);
         break;
       case 'conversation.item.input_audio_transcription.completed':
-        if (event.transcript) setCustomerText(event.transcript);
+        if (event.transcript) {
+          setCustomerText(event.transcript);
+          const id = latestBrowserClientIdRef.current ?? event.item_id ?? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`;
+          finalizeTranscript(id, 'client', event.transcript);
+          activeClientTranscriptIdRef.current = null;
+          latestBrowserClientIdRef.current = null;
+        }
+        break;
+      case 'conversation.item.input_audio_transcription.failed':
+        setVoiceError(event.error?.message ?? "OpenAI n'a pas fourni la transcription de ce message vocal.");
+        break;
+      case 'conversation.item.created': {
+        const item = event.item;
+        if (item?.role === 'user') {
+          const userText = (item.content ?? [])
+            .map((part) => part.transcript ?? part.text ?? '')
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+          if (userText) {
+            setCustomerText(userText);
+            const id = item.id ?? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`;
+            finalizeTranscript(id, 'client', userText);
+            activeClientTranscriptIdRef.current = null;
+          }
+        }
+        break;
+      }
+      case 'conversation.item.input_audio_transcription.delta':
+      case 'input_audio_transcription.delta':
+        if (event.delta) {
+          const id = latestBrowserClientIdRef.current ?? event.item_id ?? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`;
+          activeClientTranscriptIdRef.current = id;
+          appendTranscriptDelta(id, 'client', event.delta);
+          setCustomerText(transcriptMessagesRef.current.get(id)?.text ?? event.delta);
+        }
         break;
       case 'response.created':
         outputTranscriptRef.current = '';
+        activeAgentTranscriptIdRef.current = event.response_id ?? `agent-${Date.now()}`;
         setSpeaking(true);
         setListening(false);
         break;
       case 'response.output_audio_transcript.delta':
+      case 'response.audio_transcript.delta':
       case 'response.output_text.delta':
         if (event.delta) {
           outputTranscriptRef.current += event.delta;
           setAgentText(outputTranscriptRef.current);
+          const id = event.item_id ?? activeAgentTranscriptIdRef.current ?? `agent-${Date.now()}`;
+          activeAgentTranscriptIdRef.current = id;
+          upsertTranscript(id, 'agent', outputTranscriptRef.current, 'partial');
         }
         break;
       case 'response.output_audio_transcript.done':
-        if (event.transcript) setAgentText(event.transcript);
+      case 'response.audio_transcript.done':
+        if (event.transcript) {
+          setAgentText(event.transcript);
+          appendTranscript('agent', event.transcript);
+          activeAgentTranscriptIdRef.current = null;
+        }
         break;
       case 'response.output_text.done':
-        if (event.text) setAgentText(event.text);
+        if (event.text) {
+          setAgentText(event.text);
+          appendTranscript('agent', event.text);
+        }
         break;
       case 'response.function_call_arguments.done':
         handleOrderTool(event.name, event.arguments, event.call_id);
@@ -197,6 +347,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
             .filter(Boolean)
             .join(' ');
           if (transcript) setAgentText(transcript);
+          if (transcript) appendTranscript('agent', transcript);
         }
         break;
       }
@@ -221,6 +372,14 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     setAgentText("Connexion à l'équipier vocal…");
     setConnectionState('connecting');
     handledCallsRef.current.clear();
+    transcriptMessagesRef.current.clear();
+    activeClientTranscriptIdRef.current = null;
+    activeAgentTranscriptIdRef.current = null;
+    browserSpeechIdRef.current = null;
+    latestBrowserClientIdRef.current = null;
+    conversationIdRef.current = crypto.randomUUID();
+    conversationStartedAtRef.current = new Date().toISOString();
+    setTranscript([]);
 
     try {
       const peer = new RTCPeerConnection();
@@ -352,6 +511,11 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     setVoiceError('');
     microphoneReadyRef.current = false;
     setAgentText('Bonjour ! Je suis prêt à prendre votre commande.');
+    transcriptMessagesRef.current.clear();
+    activeClientTranscriptIdRef.current = null;
+    activeAgentTranscriptIdRef.current = null;
+    browserSpeechIdRef.current = null;
+    setTranscript([]);
   };
 
   useEffect(() => () => cleanupSession(), []);
@@ -422,6 +586,12 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
                 <div className="flex gap-4"><span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ff5a36] text-xs font-black">DV</span><p aria-live="polite" className="text-xl font-bold leading-snug md:text-3xl">« {agentText} »</p></div>
                 {customerText && <div className="mt-6 flex gap-4 border-t border-white/10 pt-5 text-white/60"><span className="text-xs font-bold uppercase tracking-widest">Vous</span><p>{customerText}</p></div>}
               </div>
+              <section className="mt-5 max-w-3xl rounded-[24px] border border-white/10 bg-black/15 p-5 backdrop-blur" aria-label="Transcription de la conversation">
+                <div className="flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Analyse conversationnelle</p><h2 className="mt-1 text-lg font-black">Transcription en direct</h2></div><span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black text-white/60">{transcript.length} message{transcript.length !== 1 ? 's' : ''}</span></div>
+                <div className="mt-4 max-h-52 space-y-3 overflow-y-auto pr-1">
+                  {transcript.length ? transcript.map((message, index) => <div key={`${message.id}-${index}`} className={`flex gap-3 ${message.speaker === 'agent' ? '' : 'justify-end'}`}><div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.speaker === 'agent' ? 'bg-white/10 text-white' : 'bg-[#ffc647] text-[#142018]'}`}><p className="mb-1 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest opacity-60"><span>{message.speaker === 'agent' ? 'DriveVoice IA' : 'Client'}</span>{message.status === 'partial' && <span className="animate-pulse">· en direct</span>}</p>{message.text}</div></div>) : <p className="rounded-2xl bg-white/5 px-4 py-5 text-sm text-white/50">Les paroles du client et les réponses de l’agent apparaîtront ici pendant la commande.</p>}
+                </div>
+              </section>
 
               {voiceError && <p role="alert" className="mt-4 max-w-3xl rounded-2xl border border-[#ffc647]/30 bg-[#ffc647]/10 px-4 py-3 text-sm text-[#ffe099]">{voiceError}</p>}
 
@@ -1974,18 +2144,35 @@ export default function Home() {
   const [enterpriseCatalog, setEnterpriseCatalog] = useState<CatalogProduct[]>(initialCatalog);
   const [agentWelcome, setAgentWelcome] = useState("Bonjour et bienvenue chez Burger King Paris République. Que puis-je préparer pour vous aujourd'hui ?");
   const [agentRules, setAgentRules] = useState<Array<[string, boolean]>>(initialAgentRules);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [accountEmail, setAccountEmail] = useState('');
+  const [authNotice, setAuthNotice] = useState('');
   const active = workspaceTabs.find(tab => tab.id === activeTab) ?? workspaceTabs[0];
+  const openAccount = () => {
+    setAuthOpen(true);
+    setAuthNotice('');
+  };
+  const createRestaurantAccount = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase || !accountEmail.trim()) return;
+    const { error } = await supabase.auth.signInWithOtp({
+      email: accountEmail.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setAuthNotice(error ? error.message : 'Un lien de connexion vient d’être envoyé à votre adresse e-mail.');
+  };
   return (
     <div className="min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid lg:grid-cols-[268px_1fr]">
       <aside className="border-b border-[#223a2c] bg-[#0b1f14] text-white lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r">
         <div className="flex items-center justify-between px-5 py-5 lg:block lg:px-6 lg:py-7"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black">D</span><div><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></div><span className="rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a]">● Live</span></div>
         <div className="hidden px-6 lg:block"><div className="rounded-2xl border border-white/10 bg-white/5 p-4"><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">Restaurant connecté</p><p className="mt-2 text-sm font-black">BK Paris République</p><p className="mt-1 text-[10px] text-white/45">Drive n°04 · Voie A</p></div></div>
         <nav className="flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:block lg:space-y-1 lg:overflow-visible lg:px-4" aria-label="Espaces de travail DriveVoice">{workspaceTabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
-        <div className="absolute bottom-6 left-4 right-4 hidden rounded-2xl border border-white/10 p-4 lg:block"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div><p className="text-xs font-black">Alex Martin</p><p className="text-[9px] text-white/40">Administrateur réseau</p></div></div></div>
+        <button onClick={openAccount} className="absolute bottom-6 left-4 right-4 hidden rounded-2xl border border-white/10 p-4 text-left lg:block"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div><p className="text-xs font-black">Créer un compte restaurant</p><p className="text-[9px] text-white/40">Accès sécurisé par e-mail</p></div></div></button>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
         {activeTab === 'order' ? <OrderWorkspace products={enterpriseCatalog} agentWelcome={agentWelcome} agentRules={agentRules} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <DashboardPanel />}{activeTab === 'integrations' && <IntegrationsPanel />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}
       </main>
+      {authOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Créer un compte restaurant"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice restaurants</p><h2 className="mt-2 text-2xl font-black">Créer votre compte</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Recevez un lien sécurisé pour accéder à votre espace restaurant.</p></div><button onClick={() => setAuthOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={createRestaurantAccount} className="mt-7"><label className="text-xs font-black text-[#68736a]">Adresse e-mail professionnelle<input required type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="restaurant@exemple.fr" /></label><button disabled={!isSupabaseConfigured} className="mt-4 w-full rounded-xl bg-[#ff5a36] py-3.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">Recevoir mon lien d’accès</button>{!isSupabaseConfigured && <p className="mt-3 text-xs text-[#b26b00]">L’authentification sera disponible après configuration Supabase.</p>}{authNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{authNotice}</p>}</form><p className="mt-6 text-center text-[10px] text-[#98a099]">Connexion sans mot de passe · lien à usage unique</p></div></div>}
     </div>
   );
 }

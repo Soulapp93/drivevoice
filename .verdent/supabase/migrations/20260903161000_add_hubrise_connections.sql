@@ -16,6 +16,19 @@ create table if not exists public.restaurant_hubrise_connections (
   unique (location_id)
 );
 
+alter table public.restaurants add column if not exists owner_id uuid references auth.users(id) on delete cascade;
+create index if not exists idx_restaurants_owner on public.restaurants (owner_id);
+
+drop policy if exists "restaurants_owner_access" on public.restaurants;
+create policy "restaurants_owner_access" on public.restaurants
+  for all to authenticated using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+
+drop policy if exists "restaurant_products_owner_access" on public.restaurant_products;
+create policy "restaurant_products_owner_access" on public.restaurant_products
+  for all to authenticated
+  using (exists (select 1 from public.restaurants r where r.id = restaurant_id and r.owner_id = auth.uid()))
+  with check (exists (select 1 from public.restaurants r where r.id = restaurant_id and r.owner_id = auth.uid()));
+
 create index if not exists idx_hubrise_connections_restaurant
   on public.restaurant_hubrise_connections (restaurant_id);
 

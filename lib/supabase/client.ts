@@ -9,7 +9,7 @@ let client: SupabaseClient | null = null;
 
 if (isSupabaseConfigured) {
   client = createClient(supabaseUrl!, supabaseAnonKey!, {
-    auth: { persistSession: false, autoRefreshToken: false },
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   });
 }
 

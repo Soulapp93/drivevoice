@@ -56,6 +56,7 @@ create index if not exists idx_master_products_category on public.master_product
 -- ============================================================
 create table if not exists public.restaurants (
   id            uuid primary key default gen_random_uuid(),
+  owner_id      uuid references auth.users(id) on delete cascade,
   brand_id      uuid references public.master_brands(id) on delete set null,
   name          text not null,
   code          text,
@@ -86,6 +87,7 @@ create table if not exists public.restaurant_products (
 );
 
 create index if not exists idx_restaurant_products_restaurant on public.restaurant_products (restaurant_id);
+create index if not exists idx_restaurants_owner on public.restaurants (owner_id);
 
 -- Connexion HubRise par établissement. Les tokens doivent être chiffrés
 -- avant leur stockage par la route serveur OAuth.
