@@ -54,7 +54,7 @@ export async function POST(request: Request) {
   if (action === 'sync_catalog') {
     const { data: conn, error: connError } = await supabase
       .from('restaurant_hubrise_connections')
-      .select('*')
+      .select('access_token, status')
       .eq('restaurant_id', restaurantId)
       .single();
 
@@ -97,7 +97,7 @@ export async function POST(request: Request) {
         count++;
       }
 
-      await supabase.from('restaurant_hubrise_connections').update({ last_sync_at: new Date().toISOString(), catalog_id: catalog.id, connected: true, status: 'connected', last_error: null }).eq('restaurant_id', restaurantId);
+      await supabase.from('restaurant_hubrise_connections').update({ last_sync_at: new Date().toISOString(), catalog_id: catalog.id, status: 'connected', last_error: null }).eq('restaurant_id', restaurantId);
 
       return Response.json({ success: true, productsImported: count, catalogId: catalog.id });
     } catch (err) {
@@ -109,12 +109,12 @@ export async function POST(request: Request) {
 
   const { data: conn } = await supabase
     .from('restaurant_hubrise_connections')
-    .select('status, connected, last_sync_at, last_error, account_id, location_id, catalog_id')
+    .select('status, last_sync_at, last_error, account_id, location_id, catalog_id')
     .eq('restaurant_id', restaurantId)
     .single();
 
   return Response.json({
-    connected: conn?.connected === true,
+    connected: conn?.status === 'connected',
     status: conn?.status || 'disconnected',
     lastSyncAt: conn?.last_sync_at || null,
     lastError: conn?.last_error || null,

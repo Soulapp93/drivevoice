@@ -115,7 +115,6 @@ Deno.serve(async (req) => {
         refresh_token: tokens.refresh_token || null,
         token_expires_at: tokens.expires_in ? new Date(Date.now() + tokens.expires_in * 1000).toISOString() : null,
         status: 'connected',
-        connected: true,
         last_sync_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }, { onConflict: 'restaurant_id' });
