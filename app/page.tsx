@@ -127,7 +127,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversationId: conversationIdRef.current,
-          restaurantId: 'demo-bk-paris-republique',
+          restaurantId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
           startedAt: conversationStartedAtRef.current,
           endedAt: new Date().toISOString(),
           messages,
@@ -1370,31 +1370,108 @@ function IntegrationsPanel() {
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success'>('idle');
   const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [hubriseMessage, setHubriseMessage] = useState('');
+  const [lastSync, setLastSync] = useState<string | null>(null);
+  const [productsCount, setProductsCount] = useState<number | null>(null);
+  const [orderTestState, setOrderTestState] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
+  const [orderTestMessage, setOrderTestMessage] = useState('');
+  const restaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/hubrise/callback?restaurantId=${encodeURIComponent(restaurantId)}&action=status`, { method: 'POST' });
+      const data = await res.json() as { connected?: boolean; lastSyncAt?: string | null; error?: string };
+      if (data.connected) {
+        setHubriseState('connected');
+        setLastSync(data.lastSyncAt || null);
+      } else {
+        setHubriseState('idle');
+      }
+      if (data.error) setHubriseMessage(data.error);
+    } catch {
+      setHubriseState('idle');
+    }
+  }, [restaurantId]);
+
+  useEffect(() => {
+    void loadStatus();
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('hubrise') === 'connected') {
+      setHubriseState('connected');
+      window.history.replaceState({}, '', window.location.pathname + window.location.search.replace(/[?&]hubrise=connected[^&]*/, '').replace(/^\?&/, '?'));
+      void loadStatus();
+    } else if (params.get('hubrise') === 'error') {
+      setHubriseState('error');
+      setHubriseMessage(decodeURIComponent(params.get('reason') || 'Erreur OAuth HubRise'));
+    }
+  }, [loadStatus]);
+
   const runTest = () => { setTestState('testing'); window.setTimeout(() => setTestState('success'), 900); };
+
   const connectHubRise = async () => {
     setHubriseState('connecting');
     setHubriseMessage('');
     try {
       const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? 'https://pfnwodwpefugpcynykga.supabase.co'}/functions/v1/hubrise-oauth?action=connect`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? 'https://pfnwodwpefugpcynykga.supabase.co'}/functions/v1/3f360453-88a3-432c-8d08-671a2a0f6e14?action=connect`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
         },
-        body: JSON.stringify({ restaurantId: 'demo-bk-paris-republique' }),
+        body: JSON.stringify({ restaurantId }),
       });
       const result = await response.json() as { url?: string; error?: string };
       if (!response.ok || !result.url) {
         throw new Error(result.error ?? 'Impossible de démarrer la connexion HubRise.');
       }
-      window.sessionStorage.setItem('hubrise_oauth_restaurant_id', 'demo-bk-paris-republique');
+      window.sessionStorage.setItem('hubrise_oauth_restaurant_id', restaurantId);
       window.location.assign(result.url);
     } catch (error) {
       setHubriseState('error');
       setHubriseMessage(error instanceof Error ? error.message : String(error));
     }
   };
+
+  const syncCatalog = async () => {
+    setHubriseState('connecting');
+    setHubriseMessage('');
+    try {
+      const res = await fetch('/api/hubrise/callback?action=sync_catalog', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ restaurantId }),
+      });
+      const data = await res.json() as { success?: boolean; productsImported?: number; error?: string };
+      if (!res.ok || !data.success) throw new Error(data.error ?? 'Échec de la synchronisation');
+      setProductsCount(data.productsImported ?? null);
+      setLastSync(new Date().toISOString());
+      setHubriseState('connected');
+      setHubriseMessage(`${data.productsImported ?? 0} produits synchronisés`);
+    } catch (error) {
+      setHubriseState('error');
+      setHubriseMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const sendTestOrder = async () => {
+    setOrderTestState('sending');
+    setOrderTestMessage('');
+    try {
+      const res = await fetch('/api/hubrise/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ restaurantId, items: [{ name: 'Menu Whopper', quantity: 1, price: 1290 }] }),
+      });
+      const data = await res.json() as { success?: boolean; orderId?: string; error?: string };
+      if (!res.ok || !data.success) throw new Error(data.error ?? 'Échec de l\'envoi');
+      setOrderTestState('success');
+      setOrderTestMessage(`Commande test envoyée : ${data.orderId ?? '—'}`);
+    } catch (error) {
+      setOrderTestState('error');
+      setOrderTestMessage(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <div>
       <SectionHeading eyebrow="Configuration technique" title="Connectez votre environnement restaurant" description="HubRise centralisera la liaison avec votre caisse, votre catalogue et vos flux de commande. Les identifiants restent protégés côté serveur." action={<button onClick={runTest} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">{testState === 'testing' ? 'Test en cours…' : testState === 'success' ? '✓ Connexion validée' : 'Tester le flux complet'}</button>} />
@@ -1402,13 +1479,27 @@ function IntegrationsPanel() {
         <div className="flex flex-col gap-6 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-8">
           <div className="flex items-start gap-4">
             <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-2xl font-black">H</span>
-            <div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Connexion recommandée</p><h2 className="mt-2 text-2xl font-black">Connecter HubRise</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-white/60">Connectez la caisse de cet établissement et synchronisez les commandes, le catalogue et les disponibilités depuis un seul espace.</p></div>
-          </div>
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <button onClick={connectHubRise} disabled={hubriseState === 'connecting'} className="shrink-0 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657] disabled:opacity-60">{hubriseState === 'connecting' ? 'Connexion en cours…' : hubriseState === 'connected' ? '✓ HubRise connecté' : 'Connecter HubRise →'}</button>
-              {hubriseMessage && <p className="mt-2 max-w-xl text-xs font-semibold text-[#ff927a]">{hubriseMessage}</p>}
+              <p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">{hubriseState === 'connected' ? 'Connecté à HubRise' : 'Connexion recommandée'}</p>
+              <h2 className="mt-2 text-2xl font-black">{hubriseState === 'connected' ? 'HubRise connecté' : 'Connecter HubRise'}</h2>
+              <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/60">
+                {hubriseState === 'connected'
+                  ? `La caisse est synchronisée. ${lastSync ? 'Dernière synchronisation : ' + new Date(lastSync).toLocaleString('fr-FR') : ''} ${productsCount !== null ? `(${productsCount} produits importés)` : ''}`
+                  : 'Connectez la caisse de cet établissement et synchronisez les commandes, le catalogue et les disponibilités depuis un seul espace.'}
+              </p>
             </div>
+          </div>
+          <div className="flex flex-col gap-3 md:items-end">
+            {hubriseState === 'connected' ? (
+              <div className="flex flex-wrap gap-2">
+                <button onClick={syncCatalog} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657]">↻ Synchroniser le catalogue</button>
+                <button onClick={sendTestOrder} disabled={orderTestState === 'sending'} className="rounded-xl border border-white/30 bg-white/10 px-5 py-3 text-xs font-black text-white transition hover:bg-white/20 disabled:opacity-60">{orderTestState === 'sending' ? 'Envoi…' : 'Envoyer une commande test'}</button>
+              </div>
+            ) : (
+              <button onClick={connectHubRise} disabled={hubriseState === 'connecting'} className="shrink-0 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657] disabled:opacity-60">{hubriseState === 'connecting' ? 'Connexion en cours…' : 'Connecter HubRise →'}</button>
+            )}
+            {hubriseMessage && <p className="max-w-xl text-xs font-semibold text-[#ff927a]">{hubriseMessage}</p>}
+            {orderTestMessage && <p className={`max-w-xl text-xs font-semibold ${orderTestState === 'success' ? 'text-[#7ce3a1]' : 'text-[#ff927a]'}`}>{orderTestMessage}</p>}
           </div>
         </div>
         <div className="flex flex-wrap gap-5 border-t border-[#e3ebe5] px-6 py-4 text-xs font-bold text-[#68776c] md:px-8"><span>✓ Caisse POS</span><span>✓ Catalogue en temps réel</span><span>✓ Commandes synchronisées</span><span>✓ Données chiffrées</span></div>

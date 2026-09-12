@@ -25,16 +25,16 @@ async function loadSecrets(env: Record<string, string>): Promise<Secrets> {
   };
 }
 
+const toBase64Url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromBase64Url = (value: string) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4)), char => char.charCodeAt(0));
+
 function signState(payload: string, secret: string) {
   return createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
 function createState(restaurantId: string, secret: string) {
-  const payload = Buffer.from(JSON.stringify({
-    restaurantId,
-    nonce: randomBytes(24).toString('hex'),
-    issuedAt: Date.now(),
-  })).toString('base64url');
+  const nonce = Array.from(randomBytes(24), byte => byte.toString(16).padStart(2, '0')).join('');
+  const payload = toBase64Url(new TextEncoder().encode(JSON.stringify({ restaurantId, nonce, issuedAt: Date.now() })));
   return `${payload}.${signState(payload, secret)}`;
 }
 
@@ -42,8 +42,8 @@ function verifyState(state: string, secret: string) {
   const [payload, signature] = state.split('.');
   if (!payload || !signature) return null;
   const expected = createHmac('sha256', secret).update(payload).digest('base64url');
-  if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
-  const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { restaurantId?: string; issuedAt?: number };
+  if (signature.length !== expected.length || !timingSafeEqual(fromBase64Url(signature), fromBase64Url(expected))) return null;
+  const parsed = JSON.parse(new TextDecoder().decode(fromBase64Url(payload))) as { restaurantId?: string; issuedAt?: number };
   if (!parsed.restaurantId || !parsed.issuedAt || Date.now() - parsed.issuedAt > 10 * 60 * 1000) return null;
   return parsed;
 }
@@ -70,12 +70,12 @@ Deno.serve(async (req) => {
 
     if (action === 'connect') {
       if (!body.restaurantId) throw new Error('restaurantId required');
-      if (body.restaurantId !== 'demo-bk-paris-republique') await requireUser(req, env);
+      if (body.restaurantId !== 'a1b2c3d4-e5f6-7890-abcd-ef1234567890') await requireUser(req, env);
 
       const authUrl = new URL('https://manager.hubrise.com/oauth2/v1/authorize');
       authUrl.searchParams.set('client_id', secrets.HUBRISE_CLIENT_ID);
       authUrl.searchParams.set('redirect_uri', secrets.HUBRISE_REDIRECT_URI);
-      authUrl.searchParams.set('scope', 'location[orders.write,catalog.read,inventory.read,profile_with_email]');
+      authUrl.searchParams.set('scope', 'location[orders.write,catalog.read,inventory.read],profile');
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('state', createState(body.restaurantId, secrets.HUBRISE_STATE_SECRET));
 
