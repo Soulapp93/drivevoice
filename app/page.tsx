@@ -543,7 +543,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-[1540px] gap-5 px-5 pb-8 md:px-10 xl:grid-cols-[1.45fr_.75fr]">
+      <section className="mx-auto grid max-w-[1540px] gap-5 px-5 pb-8 md:px-10 xl:grid-cols-[1.2fr_1fr]">
         <div className="relative flex min-h-[720px] flex-col overflow-hidden rounded-[32px] bg-[#0b1f14] p-7 text-white md:p-11">
           <div className="pointer-events-none absolute -right-24 -top-28 h-80 w-80 rounded-full bg-[#ff5a36]" />
           <div className="pointer-events-none absolute right-28 top-20 h-24 w-24 rounded-full bg-[#ffc647]" />
@@ -553,20 +553,12 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
               <span className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold">FR · LIVE</span>
               <span className="text-xs text-white/55">Drive n°04 · Voie A</span>
             </div>
-            <div className="flex rounded-2xl bg-black/15 p-1.5 backdrop-blur-sm" aria-label="Choisir le restaurant">
-              {brands.map((option) => (
-                <button key={option.name} onClick={() => !started && setBrand(option)} aria-label={option.name} title={option.name} className={`grid h-9 w-10 place-items-center rounded-xl text-xs font-black transition ${brand.name === option.name ? 'scale-105 shadow-lg' : 'opacity-45 hover:opacity-80'}`} style={{ background: option.color, color: option.ink }}>
-                  {option.mark}
-                </button>
-              ))}
-            </div>
           </div>
 
           {!started ? (
             <div className="relative z-10 my-auto max-w-3xl py-16">
-              <p className="mb-5 text-sm font-bold uppercase tracking-[0.22em] text-[#ffc647]">Propulsé par OpenAI Realtime</p>
-              <h1 className="text-[clamp(3.3rem,7vw,7rem)] font-black leading-[.85] tracking-[-0.07em]">BONJOUR<span className="text-[#ff5a36]">.</span><br />ON COMMANDE ?</h1>
-              <p className="mt-7 max-w-xl text-base leading-relaxed text-white/65 md:text-lg">Parlez naturellement, sans attendre un bip. L’agent vous répond en direct et s’arrête dès que vous l’interrompez.</p>
+              <h1 className="max-w-2xl text-[clamp(2.7rem,6vw,6rem)] font-black leading-[.9] tracking-[-0.07em]">Prêt à passer votre commande<span className="text-[#ff5a36]"> ?</span></h1>
+              <p className="mt-7 max-w-xl text-base font-semibold leading-relaxed text-white/70 md:text-lg">Veuillez cliquer sur le bouton « Passer ma commande » pour commencer votre commande.</p>
             </div>
           ) : (
             <div className="relative z-10 my-auto py-8">
@@ -577,34 +569,24 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[.22em] text-[#ffc647]">{connectionState === 'connecting' ? 'Ouverture de la ligne' : listening ? 'Je vous écoute en direct' : speaking ? 'DriveVoice vous parle' : connectionState === 'connected' && !microphoneReadyRef.current ? 'Mode texte actif' : 'À vous de parler'}</p>
                   <div className="mt-3 flex h-8 items-center gap-1" aria-hidden="true">
-                    {[14, 26, 38, 22, 44, 31, 18, 36, 24, 15].map((height, index) => <span key={index} className={`wave-bar w-1.5 rounded-full ${listening || speaking ? 'bg-[#ff5a36]' : 'bg-white/20'}`} style={{ height }} />)}
+                    {[14, 26, 38, 22, 44, 31, 18, 36, 24, 15].map((height, index) => <span key={index} className={`wave-bar w-1.5 rounded-full transition-colors ${listening ? 'bg-[#ffc647]' : speaking ? 'bg-[#ff5a36]' : 'bg-white/20'}`} style={{ height }} />)}
                   </div>
                 </div>
               </div>
 
               <div className="max-w-3xl rounded-[28px] bg-white/8 p-6 backdrop-blur md:p-8">
-                <div className="flex gap-4"><span className="mt-1 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ff5a36] text-xs font-black">DV</span><p aria-live="polite" className="text-xl font-bold leading-snug md:text-3xl">« {agentText} »</p></div>
-                {customerText && <div className="mt-6 flex gap-4 border-t border-white/10 pt-5 text-white/60"><span className="text-xs font-bold uppercase tracking-widest">Vous</span><p>{customerText}</p></div>}
+                <div className="flex items-center gap-4"><span className={`grid h-12 w-12 shrink-0 place-items-center rounded-full text-xs font-black text-[#142018] ${listening ? 'bg-[#ffc647]' : speaking ? 'bg-[#ff5a36] text-white' : 'bg-white/20 text-white'}`}>{listening ? 'VOUS' : speaking ? 'DV' : '•••'}</span><div><p className="text-xl font-bold leading-snug md:text-3xl">{listening ? 'Le client parle' : speaking ? 'DriveVoice vous répond' : 'Conversation vocale active'}</p><p className="mt-2 text-sm text-white/50">Les transcriptions sont conservées en arrière-plan pour les audits.</p></div></div>
               </div>
               <section className="mt-5 max-w-3xl rounded-[24px] border border-white/10 bg-black/15 p-5 backdrop-blur" aria-label="Transcription de la conversation">
-                <div className="flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Analyse conversationnelle</p><h2 className="mt-1 text-lg font-black">Transcription en direct</h2></div><span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black text-white/60">{transcript.length} message{transcript.length !== 1 ? 's' : ''}</span></div>
-                <div className="mt-4 max-h-52 space-y-3 overflow-y-auto pr-1">
-                  {transcript.length ? transcript.map((message, index) => <div key={`${message.id}-${index}`} className={`flex gap-3 ${message.speaker === 'agent' ? '' : 'justify-end'}`}><div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${message.speaker === 'agent' ? 'bg-white/10 text-white' : 'bg-[#ffc647] text-[#142018]'}`}><p className="mb-1 flex items-center gap-2 text-[9px] font-black uppercase tracking-widest opacity-60"><span>{message.speaker === 'agent' ? 'DriveVoice IA' : 'Client'}</span>{message.status === 'partial' && <span className="animate-pulse">· en direct</span>}</p>{message.text}</div></div>) : <p className="rounded-2xl bg-white/5 px-4 py-5 text-sm text-white/50">Les paroles du client et les réponses de l’agent apparaîtront ici pendant la commande.</p>}
+                <div className="flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">État de la conversation</p><h2 className="mt-1 text-lg font-black">Prise de parole en direct</h2></div><span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black text-white/60">Transcription masquée</span></div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <div className={`rounded-2xl border p-4 ${listening ? 'border-[#ffc647]/70 bg-[#ffc647]/15' : 'border-white/10 bg-white/5'}`}><div className="flex items-center justify-between"><p className="text-[10px] font-black uppercase tracking-widest text-[#ffc647]">Client</p><span className={`h-2.5 w-2.5 rounded-full ${listening ? 'animate-pulse bg-[#ffc647]' : 'bg-white/25'}`} /></div><p className="mt-3 text-sm font-black">{listening ? 'Le client parle' : 'En attente du client'}</p><p className="mt-1 text-[10px] text-white/45">{listening ? 'Parole détectée en direct' : 'Le prochain tour de parole sera affiché ici'}</p></div>
+                  <div className={`rounded-2xl border p-4 ${speaking ? 'border-[#ff5a36]/70 bg-[#ff5a36]/15' : 'border-white/10 bg-white/5'}`}><div className="flex items-center justify-between"><p className="text-[10px] font-black uppercase tracking-widest text-[#ff927a]">DriveVoice IA</p><span className={`h-2.5 w-2.5 rounded-full ${speaking ? 'animate-pulse bg-[#ff5a36]' : 'bg-white/25'}`} /></div><p className="mt-3 text-sm font-black">{speaking ? 'L’agent parle' : 'En attente de l’agent'}</p><p className="mt-1 text-[10px] text-white/45">{speaking ? 'Réponse vocale en direct' : 'La réponse apparaîtra après le client'}</p></div>
                 </div>
               </section>
 
               {voiceError && <p role="alert" className="mt-4 max-w-3xl rounded-2xl border border-[#ffc647]/30 bg-[#ffc647]/10 px-4 py-3 text-sm text-[#ffe099]">{voiceError}</p>}
 
-              <form onSubmit={submitText} className="mt-5 flex max-w-3xl gap-2 rounded-2xl bg-white p-2 text-[#142018]">
-                <label htmlFor="order-text" className="sr-only">Écrire votre commande</label>
-                <input id="order-text" value={voiceInput} onChange={(event) => setVoiceInput(event.target.value)} disabled={connectionState !== 'connected'} placeholder="Dites ou écrivez : un menu, des frites…" className="min-w-0 flex-1 bg-transparent px-3 text-sm font-semibold outline-none placeholder:text-[#8d958e] disabled:opacity-50" />
-                <button disabled={connectionState !== 'connected'} type="submit" className="rounded-xl bg-[#ff5a36] px-5 py-3 text-sm font-black text-white transition hover:bg-[#e94e2d] disabled:cursor-not-allowed disabled:opacity-45">Envoyer</button>
-              </form>
-
-              <div className="mt-6 flex flex-wrap gap-2">
-                <span className="mr-2 self-center text-xs font-bold uppercase tracking-wider text-white/40">Suggestions</span>
-                {products.filter(product => product.available).slice(0, 5).map((product) => <button disabled={connectionState !== 'connected'} key={product.productId} onClick={() => sendTextToAgent(`Ajoute ${product.name} à ma commande.`)} className="rounded-full border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-bold transition hover:border-white/35 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35">+ {product.name}</button>)}
-              </div>
             </div>
           )}
 
@@ -617,7 +599,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           )}
         </div>
 
-        <aside className="flex min-h-[720px] flex-col rounded-[32px] bg-white p-7 md:p-9">
+        <aside className="flex min-h-[720px] flex-col rounded-[32px] bg-white p-8 shadow-sm md:p-10 xl:sticky xl:top-24 xl:h-fit">
           <div className="flex items-center justify-between border-b border-[#e7eae4] pb-7"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#899189]">Commande · {brand.mark}</p><h2 className="mt-1 text-2xl font-black tracking-[-0.04em]">Votre panier</h2></div><span className="rounded-full bg-[#f1f3ee] px-3 py-1.5 text-xs font-bold">{items.length} article{items.length !== 1 ? 's' : ''}</span></div>
 
           {confirmed ? (
@@ -1320,17 +1302,33 @@ function SectionHeading({ eyebrow, title, description, action }: { eyebrow: stri
 }
 
 function DashboardPanel() {
+  const [ordersOpen, setOrdersOpen] = useState(false);
+  const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
+  const [dashboardPeriod, setDashboardPeriod] = useState('Aujourd’hui');
+  const [periodMenuOpen, setPeriodMenuOpen] = useState(false);
   const hourly = [24, 38, 48, 62, 78, 91, 86, 70, 58, 81, 96, 74];
   const recentOrders = [
-    ['#DV-1048', '12:42', 'Vocal', '18,60 €', 'Préparation'],
-    ['#DV-1047', '12:39', 'Vocal', '12,90 €', 'Remise'],
-    ['#DV-1046', '12:36', 'Texte', '21,40 €', 'Terminée'],
-    ['#DV-1045', '12:31', 'Vocal', '15,70 €', 'Terminée'],
+    { id: '#DV-1048', date: '2026-09-09', time: '12:42', channel: 'Vocal', total: '18,60 €', status: 'Préparation', duration: '1 min 38 s', items: ['Menu Master des Chefs × 1', 'King Fries × 1'], transcript: [['Client', 'Bonjour, je voudrais un Master des Chefs avec des frites.'], ['DriveVoice IA', 'Très bien. Quelle boisson souhaitez-vous avec votre menu ?'], ['Client', 'Un Coca-Cola zéro, s’il vous plaît.']] },
+    { id: '#DV-1047', date: '2026-09-09', time: '12:39', channel: 'Vocal', total: '12,90 €', status: 'Remise', duration: '2 min 04 s', items: ['Whopper × 1', 'Frites moyennes × 1'], transcript: [['Client', 'Je prends un Whopper et des frites moyennes.'], ['DriveVoice IA', 'Votre commande est bien enregistrée.']] },
+    { id: '#DV-1046', date: '2026-09-09', time: '12:36', channel: 'Texte', total: '21,40 €', status: 'Terminée', duration: '1 min 21 s', items: ['Menu Double Cheese Bacon × 1', 'King Fusion × 1'], transcript: [['Client', 'Un menu Double Cheese Bacon et un dessert.'], ['DriveVoice IA', 'Je vous propose un King Fusion. Confirmez-vous ?']] },
+    { id: '#DV-1045', date: '2026-09-09', time: '12:31', channel: 'Vocal', total: '15,70 €', status: 'Terminée', duration: '1 min 47 s', items: ['Menu King Nuggets × 1'], transcript: [['Client', 'Je voudrais un menu King Nuggets.'], ['DriveVoice IA', 'Quelle boisson et quelle taille de frites choisissez-vous ?']] },
   ];
+  const exportOrders = () => {
+    const header = ['Commande', 'Date', 'Heure', 'Canal', 'Montant', 'Statut', 'Temps de prise'];
+    const rows = recentOrders.map((order) => [order.id, order.date, order.time, order.channel, order.total, order.status, order.duration]);
+    const csv = [header, ...rows].map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(';')).join('\n');
+    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `drivevoice-commandes-${dashboardPeriod.toLowerCase().replaceAll(' ', '-')}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div>
-      <SectionHeading eyebrow="Pilotage temps réel" title="Tableau de bord opérationnel" description="Suivez les performances de la voie drive, la qualité des conversations et les ventes générées par l'agent vocal." action={<div className="flex gap-2"><button className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-2 text-xs font-black">Aujourd'hui⌄</button><button className="rounded-xl bg-[#0b1f14] px-4 py-2 text-xs font-black text-white">Exporter</button></div>} />
+      <SectionHeading eyebrow="Pilotage temps réel" title="Tableau de bord opérationnel" description="Suivez les performances de la voie drive, la qualité des conversations et les ventes générées par l'agent vocal." action={<div className="relative flex gap-2"><button onClick={() => setPeriodMenuOpen((open) => !open)} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-2 text-xs font-black">{dashboardPeriod}⌄</button>{periodMenuOpen && <div className="absolute right-[92px] top-11 z-20 w-40 rounded-2xl border border-[#e2e7e0] bg-white p-2 shadow-xl">{['Aujourd’hui', 'Hier', 'Cette semaine', 'Ce mois', 'Cette année'].map((period) => <button key={period} onClick={() => { setDashboardPeriod(period); setPeriodMenuOpen(false); }} className={`block w-full rounded-xl px-3 py-2.5 text-left text-xs font-black ${dashboardPeriod === period ? 'bg-[#eaf5ec] text-[#27894a]' : 'hover:bg-[#f4f6f2]'}`}>{period}</button>)}</div>}<button onClick={exportOrders} className="rounded-xl bg-[#0b1f14] px-4 py-2 text-xs font-black text-white transition hover:bg-[#173b27]">Exporter CSV</button></div>} />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {[
           ['Commandes', '248', '+12,4 %', '◉'],
@@ -1338,7 +1336,7 @@ function DashboardPanel() {
           ['Panier moyen', '17,28 €', '+1,4 %', '↗'],
           ['Temps de prise', '1 min 42', '-18 sec', '◷'],
           ['Résolution vocale', '96,8 %', '+2,1 pts', '✦'],
-        ].map(([label, value, trend, icon]) => <div key={label} className={`${panelCard} p-5`}><div className="flex items-center justify-between"><span className="text-xs font-bold text-[#7e887f]">{label}</span><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f1f4ef] font-black text-[#ff5a36]">{icon}</span></div><p className="mt-5 text-3xl font-black tracking-[-.05em]">{value}</p><p className={`mt-2 text-xs font-black ${trend.startsWith('-') && label !== 'Temps de prise' ? 'text-[#e04d39]' : 'text-[#2a9b55]'}`}>{trend} <span className="font-semibold text-[#a0a8a1]">vs. hier</span></p></div>)}
+        ].map(([label, value, trend, icon]) => <button key={label} onClick={() => label === 'Commandes' && setOrdersOpen(true)} className={`${panelCard} p-5 text-left transition hover:-translate-y-0.5 hover:border-[#ffb09c] ${label === 'Commandes' ? 'cursor-pointer' : 'cursor-default'}`}><div className="flex items-center justify-between"><span className="text-xs font-bold text-[#7e887f]">{label}</span><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f1f4ef] font-black text-[#ff5a36]">{icon}</span></div><p className="mt-5 text-3xl font-black tracking-[-.05em]">{value}</p><p className={`mt-2 text-xs font-black ${trend.startsWith('-') && label !== 'Temps de prise' ? 'text-[#e04d39]' : 'text-[#2a9b55]'}`}>{trend} <span className="font-semibold text-[#a0a8a1]">vs. hier</span></p>{label === 'Commandes' && <p className="mt-3 text-[10px] font-black text-[#ff5a36]">Cliquer pour voir le détail →</p>}</button>)}
       </div>
       <div className="mt-5 grid gap-5 xl:grid-cols-[1.45fr_.8fr]">
         <section className={`${panelCard} p-6`}>
@@ -1354,9 +1352,18 @@ function DashboardPanel() {
           <div className="mt-7 space-y-3 text-xs"><div className="flex justify-between"><span className="font-bold text-[#657068]">Compréhension correcte</span><strong>96,8 %</strong></div><div className="flex justify-between"><span className="font-bold text-[#657068]">Intervention humaine</span><strong>3,2 %</strong></div><div className="flex justify-between"><span className="font-bold text-[#657068]">Abandon</span><strong>1,6 %</strong></div></div>
         </section>
       </div>
-      <section className={`${panelCard} mt-5 overflow-hidden`}><div className="flex items-center justify-between border-b border-[#e8ebe6] p-6"><div><h2 className="text-lg font-black">Dernières commandes</h2><p className="mt-1 text-xs text-[#879088]">Synchronisation KDS instantanée</p></div><button className="text-xs font-black text-[#ff5a36]">Voir toutes →</button></div><div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="bg-[#f8f9f6] text-[10px] uppercase tracking-widest text-[#8d968e]"><tr>{['Commande','Heure','Canal','Montant','Statut'].map(x=><th key={x} className="px-6 py-3">{x}</th>)}</tr></thead><tbody>{recentOrders.map(row=><tr key={row[0]} className="border-t border-[#edf0eb]"><td className="px-6 py-4 font-black">{row[0]}</td><td className="px-6 py-4 text-[#6f7971]">{row[1]}</td><td className="px-6 py-4"><span className="rounded-full bg-[#eef2ed] px-3 py-1 text-xs font-bold">{row[2]}</span></td><td className="px-6 py-4 font-black">{row[3]}</td><td className="px-6 py-4"><span className="text-xs font-black text-[#2e9553]">● {row[4]}</span></td></tr>)}</tbody></table></div></section>
+      <section className={`${panelCard} mt-5 overflow-hidden`}><div className="flex items-center justify-between border-b border-[#e8ebe6] p-6"><div><h2 className="text-lg font-black">Dernières commandes</h2><p className="mt-1 text-xs text-[#879088]">Synchronisation KDS instantanée</p></div><button onClick={() => setOrdersOpen(true)} className="text-xs font-black text-[#ff5a36]">Voir toutes →</button></div><div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="bg-[#f8f9f6] text-[10px] uppercase tracking-widest text-[#8d968e]"><tr>{['Commande','Heure','Canal','Montant','Statut'].map(x=><th key={x} className="px-6 py-3">{x}</th>)}</tr></thead><tbody>{recentOrders.map(row=><tr key={row.id} onClick={() => { setSelectedOrder(row.id); setOrdersOpen(true); }} className="cursor-pointer border-t border-[#edf0eb] hover:bg-[#fafbf8]"><td className="px-6 py-4 font-black">{row.id}</td><td className="px-6 py-4 text-[#6f7971]">{row.time}</td><td className="px-6 py-4"><span className="rounded-full bg-[#eef2ed] px-3 py-1 text-xs font-bold">{row.channel}</span></td><td className="px-6 py-4 font-black">{row.total}</td><td className="px-6 py-4"><span className="text-xs font-black text-[#2e9553]">● {row.status}</span></td></tr>)}</tbody></table></div></section>
+      {ordersOpen && <OrderHistory orders={recentOrders} selectedId={selectedOrder} onSelect={setSelectedOrder} onClose={() => { setOrdersOpen(false); setSelectedOrder(null); }} />}
     </div>
   );
+}
+
+function OrderHistory({ orders, selectedId, onSelect, onClose }: { orders: Array<{ id: string; date: string; time: string; channel: string; total: string; status: string; duration: string; items: string[]; transcript: string[][] }>; selectedId: string | null; onSelect: (id: string) => void; onClose: () => void }) {
+  const [period, setPeriod] = useState('jour');
+  const [date, setDate] = useState('2026-09-09');
+  const selected = orders.find((order) => order.id === selectedId) ?? null;
+  const filtered = orders.filter((order) => period === 'jour' ? order.date === date : period === 'mois' ? order.date.startsWith(date.slice(0, 7)) : period === 'année' ? order.date.startsWith(date.slice(0, 4)) : true);
+  return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-4 md:p-8"><div className="mx-auto max-w-6xl rounded-[28px] bg-[#f4f6f1] shadow-2xl"><div className="flex items-start justify-between border-b border-[#e1e6df] bg-white p-6 md:p-8"><div><p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">Pilotage des ventes</p><h2 className="mt-2 text-3xl font-black">Toutes les commandes</h2><p className="mt-2 text-sm text-[#738078]">Filtrez, ouvrez une commande et consultez sa conversation complète.</p></div><button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-xl bg-[#f0f3ee] text-xl font-black">×</button></div><div className="grid gap-5 p-5 md:grid-cols-[250px_1fr] md:p-8"><aside className="rounded-2xl bg-white p-5"><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Période</p><div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-1">{['jour', 'mois', 'année', 'toutes'].map((item) => <button key={item} onClick={() => setPeriod(item)} className={`rounded-xl px-4 py-3 text-left text-xs font-black capitalize ${period === item ? 'bg-[#0b1f14] text-white' : 'bg-[#f3f5f1] text-[#68736a]'}`}>{item === 'toutes' ? 'Toutes les dates' : `Par ${item}`}</button>)}</div>{period !== 'toutes' && <label className="mt-5 block text-xs font-black text-[#68736a]">Sélectionner une date<input type={period === 'jour' ? 'date' : period === 'mois' ? 'month' : 'number'} min={period === 'année' ? '2020' : undefined} max={period === 'année' ? '2100' : undefined} value={period === 'année' ? date.slice(0, 4) : period === 'mois' ? date.slice(0, 7) : date} onChange={(event) => setDate(period === 'année' ? `${event.target.value}-01-01` : period === 'mois' ? `${event.target.value}-01` : event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-3 py-3 text-sm" /></label>}<div className="mt-6 rounded-2xl bg-[#e8f6eb] p-4"><p className="text-2xl font-black text-[#248b4a]">{filtered.length}</p><p className="mt-1 text-xs font-bold text-[#55745d]">commandes affichées</p></div></aside><section className="min-w-0">{selected ? <div><button onClick={() => onSelect('')} className="mb-4 text-xs font-black text-[#ff5a36]">← Retour à la liste</button><div className="grid gap-5 lg:grid-cols-[1fr_360px]"><article className="rounded-2xl bg-white p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Commande</p><h3 className="mt-2 text-2xl font-black">{selected.id}</h3><p className="mt-1 text-xs text-[#7c887f]">{selected.date} · {selected.time} · {selected.channel}</p></div><span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-xs font-black text-[#27894a]">● {selected.status}</span></div><div className="mt-7"><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Transcription de la conversation</p><div className="mt-4 space-y-3">{selected.transcript.map(([speaker, text], index) => <div key={index} className={`rounded-2xl p-4 text-sm ${speaker === 'Client' ? 'bg-[#fff1e8]' : 'bg-[#eef5ef]'}`}><p className="mb-1 text-[10px] font-black uppercase tracking-widest text-[#89948b]">{speaker}</p>{text}</div>)}</div></div></article><aside className="rounded-2xl bg-[#0b1f14] p-6 text-white"><p className="text-xs font-black uppercase tracking-widest text-[#ffc647]">Détails opérationnels</p><div className="mt-6 space-y-4">{[['Montant total', selected.total], ['Temps de prise', selected.duration], ['Canal', selected.channel], ['Articles', String(selected.items.length)]].map(([label, value]) => <div key={label} className="flex justify-between border-b border-white/10 pb-3 text-sm"><span className="text-white/55">{label}</span><strong>{value}</strong></div>)}</div><p className="mt-7 text-xs font-black uppercase tracking-widest text-[#ffc647]">Commande client</p><ul className="mt-3 space-y-2 text-sm text-white/75">{selected.items.map((item) => <li key={item}>✓ {item}</li>)}</ul></aside></div></div> : <div className="overflow-hidden rounded-2xl bg-white"><div className="border-b border-[#edf0eb] px-5 py-4 text-xs font-black uppercase tracking-widest text-[#89948b]">Historique des commandes</div>{filtered.length ? <div className="divide-y divide-[#edf0eb]">{filtered.map((order) => <button key={order.id} onClick={() => onSelect(order.id)} className="grid w-full grid-cols-[1fr_1fr_1fr] items-center gap-3 px-5 py-5 text-left transition hover:bg-[#fafbf8] md:grid-cols-[1.2fr_1fr_1fr_1fr_1fr]"><span className="font-black">{order.id}</span><span className="text-xs text-[#7c887f]">{order.date} · {order.time}</span><span className="text-xs font-bold">{order.channel}</span><span className="font-black">{order.total}</span><span className="text-xs font-black text-[#27894a]">● {order.status}</span></button>)}</div> : <div className="p-12 text-center text-sm text-[#7b887f]">Aucune commande pour cette période.</div>}</div>}</section></div></div></div>;
 }
 
 function IntegrationsPanel() {
@@ -2141,6 +2148,7 @@ function AgentPanel({ welcome, setWelcome }: { welcome: string; setWelcome: Reac
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('order');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [enterpriseCatalog, setEnterpriseCatalog] = useState<CatalogProduct[]>(initialCatalog);
   const [agentWelcome, setAgentWelcome] = useState("Bonjour et bienvenue chez Burger King Paris République. Que puis-je préparer pour vous aujourd'hui ?");
   const [agentRules, setAgentRules] = useState<Array<[string, boolean]>>(initialAgentRules);
@@ -2152,6 +2160,10 @@ export default function Home() {
     setAuthOpen(true);
     setAuthNotice('');
   };
+  const signOut = async () => {
+    if (supabase) await supabase.auth.signOut();
+    window.location.assign('/login');
+  };
   const createRestaurantAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabase || !accountEmail.trim()) return;
@@ -2162,12 +2174,12 @@ export default function Home() {
     setAuthNotice(error ? error.message : 'Un lien de connexion vient d’être envoyé à votre adresse e-mail.');
   };
   return (
-    <div className="min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid lg:grid-cols-[268px_1fr]">
-      <aside className="border-b border-[#223a2c] bg-[#0b1f14] text-white lg:sticky lg:top-0 lg:h-screen lg:border-b-0 lg:border-r">
-        <div className="flex items-center justify-between px-5 py-5 lg:block lg:px-6 lg:py-7"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black">D</span><div><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></div><span className="rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a]">● Live</span></div>
-        <div className="hidden px-6 lg:block"><div className="rounded-2xl border border-white/10 bg-white/5 p-4"><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">Restaurant connecté</p><p className="mt-2 text-sm font-black">BK Paris République</p><p className="mt-1 text-[10px] text-white/45">Drive n°04 · Voie A</p></div></div>
-        <nav className="flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:block lg:space-y-1 lg:overflow-visible lg:px-4" aria-label="Espaces de travail DriveVoice">{workspaceTabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
-        <button onClick={openAccount} className="absolute bottom-6 left-4 right-4 hidden rounded-2xl border border-white/10 p-4 text-left lg:block"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div><p className="text-xs font-black">Créer un compte restaurant</p><p className="text-[9px] text-white/40">Accès sécurisé par e-mail</p></div></div></button>
+    <div className={`min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid ${sidebarCollapsed ? 'lg:grid-cols-[88px_1fr]' : 'lg:grid-cols-[268px_1fr]'}`}>
+      <aside className="drivevoice-sidebar relative border-b border-[#223a2c] bg-[#0b1f14] pb-4 text-white shadow-[12px_0_40px_rgba(7,26,17,.08)] lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:overflow-x-hidden lg:overflow-y-auto lg:overscroll-contain lg:border-b-0 lg:border-r lg:pb-28">
+        <div className={`flex items-center justify-between px-5 py-5 lg:px-5 lg:py-7 ${sidebarCollapsed ? 'lg:flex-col lg:gap-5' : 'lg:block'}`}><div className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black shadow-[0_8px_24px_rgba(255,90,54,.22)]">D</span><div className={sidebarCollapsed ? 'lg:hidden' : ''}><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></div><div className="flex items-center gap-2"><span className={`rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a] ${sidebarCollapsed ? 'lg:hidden' : ''}`}>● Live</span><button onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} className="hidden h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-sm font-black transition hover:bg-white/10 lg:grid" aria-label={sidebarCollapsed ? 'Développer la barre latérale' : 'Réduire la barre latérale'}>{sidebarCollapsed ? '→' : '←'}</button></div></div>
+        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? 'BK' : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>BK Paris République</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>Drive n°04 · Voie A</p></div></div>
+        <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:block lg:space-y-1 lg:overflow-visible ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
+        <button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className={`absolute bottom-6 hidden rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36] lg:block ${sidebarCollapsed ? 'left-3 right-3' : 'left-4 right-4'}`}><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
         {activeTab === 'order' ? <OrderWorkspace products={enterpriseCatalog} agentWelcome={agentWelcome} agentRules={agentRules} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <DashboardPanel />}{activeTab === 'integrations' && <IntegrationsPanel />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}

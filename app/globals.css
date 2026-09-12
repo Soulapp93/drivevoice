@@ -17,6 +17,28 @@ body {
 
 button { cursor: pointer; }
 
+.drivevoice-sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+
+.drivevoice-sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.drivevoice-sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.drivevoice-sidebar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.drivevoice-sidebar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 198, 71, 0.7);
+}
+
 /* Ancien éditeur conservé uniquement pour compatibilité de données. */
 [aria-label="Éditeur de produit"] { display: none !important; }
 

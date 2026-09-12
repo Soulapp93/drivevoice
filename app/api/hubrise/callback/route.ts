@@ -1,3 +1,15 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verifyState(state: string, secret: string) {
+  const [payload, signature] = state.split('.');
+  if (!payload || !signature) return null;
+  const expected = createHmac('sha256', secret).update(payload).digest('base64url');
+  if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { restaurantId?: string; issuedAt?: number };
+  if (!parsed.restaurantId || !parsed.issuedAt || Date.now() - parsed.issuedAt > 10 * 60 * 1000) return null;
+  return parsed;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
@@ -8,7 +20,11 @@ export async function GET(request: Request) {
 
   let stateData: { restaurantId: string };
   try {
-    stateData = JSON.parse(Buffer.from(state, 'base64url').toString('utf8')) as { restaurantId: string };
+    const stateSecret = process.env.HUBRISE_STATE_SECRET ?? process.env.HUBRISE_CLIENT_SECRET;
+    if (!stateSecret) throw new Error('HubRise state secret missing');
+    const verified = verifyState(state, stateSecret);
+    if (!verified) throw new Error('Invalid or expired state');
+    stateData = { restaurantId: verified.restaurantId! };
   } catch {
     return Response.json({ error: 'État OAuth invalide.' }, { status: 400 });
   }
