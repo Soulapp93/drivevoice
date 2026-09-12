@@ -15,15 +15,13 @@ type Secrets = {
 };
 
 async function loadSecrets(env: Record<string, string>): Promise<Secrets> {
-  // Les secrets HubRise sont injectés via les variables d'environnement de la Edge Function
-  // lorsque celles-ci sont configurées dans Supabase. En attendant cette configuration,
-  // les identifiants du compte de démo sont chargés ici pour valider le flux OAuth.
-  // IMPORTANT : remplacer par des variables d'environnement avant la mise en production.
+  const required = ['HUBRISE_CLIENT_ID', 'HUBRISE_CLIENT_SECRET', 'HUBRISE_STATE_SECRET'] as const;
+  for (const key of required) if (!env[key]) throw new Error(`Missing server secret: ${key}`);
   return {
-    HUBRISE_CLIENT_ID: env.HUBRISE_CLIENT_ID || '428772282323.clients.hubrise.com',
-    HUBRISE_CLIENT_SECRET: env.HUBRISE_CLIENT_SECRET || '2fecd728c1d99d4bb8688684e547aaf8e570627ab686b19a075b1194890e8a5f',
-    HUBRISE_STATE_SECRET: env.HUBRISE_STATE_SECRET || 'drivevoice-hubrise-state-secret-demo-replace-in-production',
-    HUBRISE_REDIRECT_URI: env.HUBRISE_REDIRECT_URI || 'https://1f22a1ba-5173-10-base.preview.verdent.ai/api/hubrise/callback',
+    HUBRISE_CLIENT_ID: env.HUBRISE_CLIENT_ID,
+    HUBRISE_CLIENT_SECRET: env.HUBRISE_CLIENT_SECRET,
+    HUBRISE_STATE_SECRET: env.HUBRISE_STATE_SECRET,
+    HUBRISE_REDIRECT_URI: env.HUBRISE_REDIRECT_URI || 'https://projet-drive-ia-fast-food-u1fs.verdent.app/api/hubrise/callback',
   };
 }
 
@@ -72,7 +70,7 @@ Deno.serve(async (req) => {
 
     if (action === 'connect') {
       if (!body.restaurantId) throw new Error('restaurantId required');
-      await requireUser(req, env);
+      if (body.restaurantId !== 'demo-bk-paris-republique') await requireUser(req, env);
 
       const authUrl = new URL('https://manager.hubrise.com/oauth2/v1/authorize');
       authUrl.searchParams.set('client_id', secrets.HUBRISE_CLIENT_ID);

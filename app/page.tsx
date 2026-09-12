@@ -1380,7 +1380,7 @@ function IntegrationsPanel() {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          ...(sessionData.session ? { authorization: `Bearer ${sessionData.session.access_token}` } : {}),
+          authorization: `Bearer ${sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
         },
         body: JSON.stringify({ restaurantId: 'demo-bk-paris-republique' }),
       });
