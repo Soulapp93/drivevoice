@@ -6,7 +6,7 @@ function signState(payload: string, secret: string) {
 
 export async function GET(request: Request) {
   const clientId = process.env.HUBRISE_CLIENT_ID;
-  const stateSecret = process.env.HUBRISE_STATE_SECRET ?? process.env.HUBRISE_CLIENT_SECRET;
+  const stateSecret = process.env.HUBRISE_STATE_SECRET ?? process.env.HUBRISE_CLIENT_SECRET ?? '';
   const redirectUri = process.env.HUBRISE_REDIRECT_URI ?? `${new URL(request.url).origin}/api/hubrise/callback`;
   const missing = [
     !clientId && 'HUBRISE_CLIENT_ID',
@@ -28,7 +28,7 @@ export async function GET(request: Request) {
   const payload = Buffer.from(JSON.stringify({ restaurantId, nonce: randomBytes(24).toString('hex'), issuedAt: Date.now() })).toString('base64url');
   const state = `${payload}.${signState(payload, stateSecret)}`;
   const authorizeUrl = new URL('https://manager.hubrise.com/oauth2/v1/authorize');
-  authorizeUrl.searchParams.set('client_id', clientId);
+  authorizeUrl.searchParams.set('client_id', clientId as string);
   authorizeUrl.searchParams.set('redirect_uri', redirectUri);
   authorizeUrl.searchParams.set('response_type', 'code');
   authorizeUrl.searchParams.set('scope', 'location[orders.write,catalog.read,inventory.read]');
