@@ -1368,11 +1368,32 @@ function OrderHistory({ orders, selectedId, onSelect, onClose }: { orders: Array
 
 function IntegrationsPanel() {
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success'>('idle');
-  const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected'>('idle');
+  const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
+  const [hubriseMessage, setHubriseMessage] = useState('');
   const runTest = () => { setTestState('testing'); window.setTimeout(() => setTestState('success'), 900); };
-  const connectHubRise = () => {
+  const connectHubRise = async () => {
     setHubriseState('connecting');
-    window.location.assign(`/api/hubrise/connect?restaurantId=${encodeURIComponent('demo-bk-paris-republique')}`);
+    setHubriseMessage('');
+    try {
+      const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
+      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? 'https://pfnwodwpefugpcynykga.supabase.co'}/functions/v1/hubrise-oauth?action=connect`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(sessionData.session ? { authorization: `Bearer ${sessionData.session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ restaurantId: 'demo-bk-paris-republique' }),
+      });
+      const result = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !result.url) {
+        throw new Error(result.error ?? 'Impossible de démarrer la connexion HubRise.');
+      }
+      window.sessionStorage.setItem('hubrise_oauth_restaurant_id', 'demo-bk-paris-republique');
+      window.location.assign(result.url);
+    } catch (error) {
+      setHubriseState('error');
+      setHubriseMessage(error instanceof Error ? error.message : String(error));
+    }
   };
   return (
     <div>
@@ -1383,7 +1404,12 @@ function IntegrationsPanel() {
             <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-2xl font-black">H</span>
             <div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Connexion recommandée</p><h2 className="mt-2 text-2xl font-black">Connecter HubRise</h2><p className="mt-2 max-w-xl text-sm leading-relaxed text-white/60">Connectez la caisse de cet établissement et synchronisez les commandes, le catalogue et les disponibilités depuis un seul espace.</p></div>
           </div>
-          <button onClick={connectHubRise} disabled={hubriseState === 'connecting'} className="shrink-0 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657] disabled:opacity-60">{hubriseState === 'connecting' ? 'Connexion en cours…' : hubriseState === 'connected' ? '✓ HubRise connecté' : 'Connecter HubRise →'}</button>
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <button onClick={connectHubRise} disabled={hubriseState === 'connecting'} className="shrink-0 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657] disabled:opacity-60">{hubriseState === 'connecting' ? 'Connexion en cours…' : hubriseState === 'connected' ? '✓ HubRise connecté' : 'Connecter HubRise →'}</button>
+              {hubriseMessage && <p className="mt-2 max-w-xl text-xs font-semibold text-[#ff927a]">{hubriseMessage}</p>}
+            </div>
+          </div>
         </div>
         <div className="flex flex-wrap gap-5 border-t border-[#e3ebe5] px-6 py-4 text-xs font-bold text-[#68776c] md:px-8"><span>✓ Caisse POS</span><span>✓ Catalogue en temps réel</span><span>✓ Commandes synchronisées</span><span>✓ Données chiffrées</span></div>
       </section>
