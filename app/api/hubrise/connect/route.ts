@@ -1,13 +1,16 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { getHubRiseSecrets } from '@/lib/hubrise-secrets';
 
 function signState(payload: string, secret: string) {
   return createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
 export async function GET(request: Request) {
-  const clientId = process.env.HUBRISE_CLIENT_ID;
-  const stateSecret = process.env.HUBRISE_STATE_SECRET ?? process.env.HUBRISE_CLIENT_SECRET ?? '';
-  const redirectUri = process.env.HUBRISE_REDIRECT_URI ?? `${new URL(request.url).origin}/api/hubrise/callback`;
+  const origin = new URL(request.url).origin;
+  const secrets = await getHubRiseSecrets(origin);
+  const clientId = secrets?.HUBRISE_CLIENT_ID;
+  const stateSecret = secrets?.HUBRISE_STATE_SECRET ?? '';
+  const redirectUri = secrets?.HUBRISE_REDIRECT_URI ?? `${origin}/api/hubrise/callback`;
   const missing = [
     !clientId && 'HUBRISE_CLIENT_ID',
     !stateSecret && 'HUBRISE_STATE_SECRET ou HUBRISE_CLIENT_SECRET',

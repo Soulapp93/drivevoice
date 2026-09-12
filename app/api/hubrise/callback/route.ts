@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { getHubRiseSecrets } from '@/lib/hubrise-secrets';
 
 const fromBase64Url = (value: string) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4)), char => char.charCodeAt(0));
 
@@ -35,10 +36,11 @@ export async function GET(request: Request) {
     return redirectWith(url, '/?tab=technical&hubrise=error&reason=missing_params');
   }
 
-  const clientId = process.env.HUBRISE_CLIENT_ID;
-  const clientSecret = process.env.HUBRISE_CLIENT_SECRET;
-  const stateSecret = process.env.HUBRISE_STATE_SECRET ?? clientSecret;
-  const redirectUri = process.env.HUBRISE_REDIRECT_URI ?? `${url.origin}/api/hubrise/callback`;
+  const secrets = await getHubRiseSecrets(url.origin);
+  const clientId = secrets?.HUBRISE_CLIENT_ID;
+  const clientSecret = secrets?.HUBRISE_CLIENT_SECRET;
+  const stateSecret = secrets?.HUBRISE_STATE_SECRET;
+  const redirectUri = secrets?.HUBRISE_REDIRECT_URI ?? `${url.origin}/api/hubrise/callback`;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://pfnwodwpefugpcynykga.supabase.co';
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || '';
 
