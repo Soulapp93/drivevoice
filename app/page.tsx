@@ -1411,21 +1411,8 @@ function IntegrationsPanel() {
     setHubriseState('connecting');
     setHubriseMessage('');
     try {
-      const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
-      const response = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.VITE_SUPABASE_URL ?? 'https://pfnwodwpefugpcynykga.supabase.co'}/functions/v1/3f360453-88a3-432c-8d08-671a2a0f6e14?action=connect`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ restaurantId }),
-      });
-      const result = await response.json() as { url?: string; error?: string };
-      if (!response.ok || !result.url) {
-        throw new Error(result.error ?? 'Impossible de démarrer la connexion HubRise.');
-      }
       window.sessionStorage.setItem('hubrise_oauth_restaurant_id', restaurantId);
-      window.location.assign(result.url);
+      window.location.assign(`/api/hubrise/connect?restaurantId=${encodeURIComponent(restaurantId)}`);
     } catch (error) {
       setHubriseState('error');
       setHubriseMessage(error instanceof Error ? error.message : String(error));
