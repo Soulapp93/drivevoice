@@ -36,6 +36,21 @@ export async function GET(request: Request) {
     return redirectWith(url, '/?tab=technical&hubrise=error&reason=missing_params');
   }
 
+  try {
+    const edgeResponse = await fetch('https://p0aa5f6059f39dd5d8fa8.supabase.co/functions/v1/hubrise-oauth?action=callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, state }),
+    });
+    const edgeData = await edgeResponse.json().catch(() => ({})) as { success?: boolean; restaurantId?: string; error?: string };
+    if (!edgeResponse.ok || !edgeData.success) {
+      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(edgeData.error || 'oauth_failed'));
+    }
+    return redirectWith(url, `/?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(edgeData.restaurantId || '')}`);
+  } catch {
+    return redirectWith(url, '/?tab=technical&hubrise=error&reason=oauth_network_error');
+  }
+
   const secrets = await getHubRiseSecrets(url.origin);
   const clientId = secrets?.HUBRISE_CLIENT_ID;
   const clientSecret = secrets?.HUBRISE_CLIENT_SECRET;

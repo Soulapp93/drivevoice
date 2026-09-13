@@ -468,7 +468,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
 
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      const response = await fetch(`/api/realtime-call?brand=${encodeURIComponent(brand.name)}`, {
+      const response = await fetch('https://p0aa5f6059f39dd5d8fa8.supabase.co/functions/v1/realtime-call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
         body: offer.sdp,
@@ -1412,7 +1412,14 @@ function IntegrationsPanel() {
     setHubriseMessage('');
     try {
       window.sessionStorage.setItem('hubrise_oauth_restaurant_id', restaurantId);
-      window.location.assign(`/api/hubrise/connect?restaurantId=${encodeURIComponent(restaurantId)}`);
+      const response = await fetch('https://p0aa5f6059f39dd5d8fa8.supabase.co/functions/v1/hubrise-oauth?action=connect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ restaurantId }),
+      });
+      const result = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !result.url) throw new Error(result.error ?? 'Impossible de démarrer la connexion HubRise.');
+      window.location.assign(result.url);
     } catch (error) {
       setHubriseState('error');
       setHubriseMessage(error instanceof Error ? error.message : String(error));
