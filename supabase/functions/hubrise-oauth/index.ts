@@ -227,7 +227,30 @@ Deno.serve(async (req) => {
       const catalogs = Array.isArray(catalogPayload) ? catalogPayload : (catalogPayload as { data?: unknown[] }).data ?? [catalogPayload];
       const catalog = catalogs[0] as Record<string, unknown> | undefined;
       const catalogId = String(catalog?.id ?? catalog?.ref ?? '');
-      const products = collectProducts(catalogPayload);
+      if (!catalogId) throw new Error('HubRise catalog has no id');
+      const detailResponse = await fetch(`https://api.hubrise.com/v1/catalogs/${encodeURIComponent(catalogId)}`, {
+        headers: { 'X-Access-Token': connection.access_token, Accept: 'application/json' },
+      });
+      if (!detailResponse.ok) throw new Error(`HubRise catalog detail error: ${await detailResponse.text()}`);
+      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>> } };
+      const categoryNames = new Map(
+        (detailPayload.data?.categories ?? []).flatMap(category => [
+          [String(category.id ?? ''), category.name ?? 'Autres'],
+          [String(category.ref ?? ''), category.name ?? 'Autres'],
+        ] as Array<[string, string]>),
+      );
+      const products = (detailPayload.data?.products ?? []).flatMap(product => {
+        const skus = Array.isArray(product.skus) ? product.skus as Array<Record<string, unknown>> : [];
+        return skus.map(sku => ({
+          ...sku,
+          id: sku.id ?? sku.ref,
+          sku_ref: sku.ref ?? sku.id,
+          name: `${String(product.name ?? 'Produit sans nom')}${sku.name ? ` — ${String(sku.name)}` : ''}`,
+          description: product.description,
+          category: categoryNames.get(String(product.category_id ?? product.category_ref ?? '')) ?? 'Autres',
+          available: !(Array.isArray(sku.tags) && sku.tags.includes('hidden')),
+        }));
+      });
       const rows = products
         .filter((product, index, all) => product.id || product.ref || product.sku_ref ? all.findIndex(candidate => (candidate.id ?? candidate.ref ?? candidate.sku_ref) === (product.id ?? product.ref ?? product.sku_ref)) === index : false)
         .map((product, index) => ({
