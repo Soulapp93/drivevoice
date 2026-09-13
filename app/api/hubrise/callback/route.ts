@@ -37,7 +37,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const edgeResponse = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/3f360453-88a3-432c-8d08-671a2a0f6e14?action=callback', {
+    const edgeResponse = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=callback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, state }),

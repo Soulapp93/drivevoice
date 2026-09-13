@@ -468,9 +468,13 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
 
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      const response = await fetch(`/api/realtime-call?brand=${encodeURIComponent(brand.name)}`, {
+      const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
+      const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/realtime-call', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/sdp' },
+        headers: {
+          'Content-Type': 'application/sdp',
+          ...(sessionData.session?.access_token ? { Authorization: `Bearer ${sessionData.session.access_token}` } : {}),
+        },
         body: offer.sdp,
       });
       if (!response.ok) throw new Error(`realtime-${response.status}`);
@@ -1413,7 +1417,7 @@ function IntegrationsPanel() {
     try {
       window.sessionStorage.setItem('hubrise_oauth_restaurant_id', restaurantId);
       const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
-      const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/3f360453-88a3-432c-8d08-671a2a0f6e14?action=connect', {
+      const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=connect', {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
