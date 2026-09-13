@@ -468,7 +468,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
 
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      const response = await fetch('https://p0aa5f6059f39dd5d8fa8.supabase.co/functions/v1/realtime-call', {
+      const response = await fetch(`/api/realtime-call?brand=${encodeURIComponent(brand.name)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
         body: offer.sdp,
@@ -1412,9 +1412,13 @@ function IntegrationsPanel() {
     setHubriseMessage('');
     try {
       window.sessionStorage.setItem('hubrise_oauth_restaurant_id', restaurantId);
-      const response = await fetch('https://p0aa5f6059f39dd5d8fa8.supabase.co/functions/v1/hubrise-oauth?action=connect', {
+      const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
+      const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/3f360453-88a3-432c-8d08-671a2a0f6e14?action=connect', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
         body: JSON.stringify({ restaurantId }),
       });
       const result = await response.json() as { url?: string; error?: string };
