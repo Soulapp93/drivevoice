@@ -1385,7 +1385,14 @@ function IntegrationsPanel() {
 
   const loadStatus = useCallback(async () => {
     try {
-      const res = await fetch(`/api/hubrise/callback?restaurantId=${encodeURIComponent(restaurantId)}&action=status`, { method: 'POST' });
+      const res = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ restaurantId }),
+      });
       const data = await res.json() as { connected?: boolean; lastSyncAt?: string | null; error?: string };
       if (data.connected) {
         setHubriseState('connected');

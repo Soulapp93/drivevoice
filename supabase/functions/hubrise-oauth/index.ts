@@ -124,6 +124,26 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ success: true, restaurantId: parsed.restaurantId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
+    if (action === 'status') {
+      if (!body.restaurantId) throw new Error('restaurantId required');
+      const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+      const { data, error } = await supabase
+        .from('restaurant_hubrise_connections')
+        .select('status, last_sync_at, last_error, account_id, location_id, catalog_id')
+        .eq('restaurant_id', body.restaurantId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return new Response(JSON.stringify({
+        connected: data?.status === 'connected',
+        status: data?.status || 'disconnected',
+        lastSyncAt: data?.last_sync_at || null,
+        lastError: data?.last_error || null,
+        accountId: data?.account_id || null,
+        locationId: data?.location_id || null,
+        catalogId: data?.catalog_id || null,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+
     throw new Error('Unknown action');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
