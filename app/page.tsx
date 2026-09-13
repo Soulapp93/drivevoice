@@ -1448,12 +1448,15 @@ function IntegrationsPanel() {
     setHubriseState('connecting');
     setHubriseMessage('');
     try {
-      const res = await fetch('/api/hubrise/callback?action=sync_catalog', {
+      const res = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=sync_catalog', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
         body: JSON.stringify({ restaurantId }),
       });
-      const data = await res.json() as { success?: boolean; productsImported?: number; error?: string };
+      const data = await res.json().catch(() => ({})) as { success?: boolean; productsImported?: number; error?: string };
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Échec de la synchronisation');
       setProductsCount(data.productsImported ?? null);
       setLastSync(new Date().toISOString());
@@ -1469,12 +1472,15 @@ function IntegrationsPanel() {
     setOrderTestState('sending');
     setOrderTestMessage('');
     try {
-      const res = await fetch('/api/hubrise/orders', {
+      const res = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=send_order', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ restaurantId, items: [{ name: 'Menu Whopper', quantity: 1, price: 1290 }] }),
+        headers: {
+          'content-type': 'application/json',
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ restaurantId, items: [{ name: 'Menu Whopper', quantity: 1, price: 12.9 }] }),
       });
-      const data = await res.json() as { success?: boolean; orderId?: string; error?: string };
+      const data = await res.json().catch(() => ({})) as { success?: boolean; orderId?: string; error?: string };
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Échec de l\'envoi');
       setOrderTestState('success');
       setOrderTestMessage(`Commande test envoyée : ${data.orderId ?? '—'}`);
