@@ -14,6 +14,25 @@ type Secrets = {
   HUBRISE_REDIRECT_URI: string;
 };
 
+type HubRiseProduct = {
+  id?: string;
+  ref?: string;
+  sku_ref?: string;
+  name?: string;
+  product_name?: string;
+  description?: string;
+  category?: string;
+  category_name?: string;
+  category_id?: string;
+  price?: string | number;
+  prices?: Array<{ price?: string | number }>;
+  variations?: Array<{ price?: string | number; ref?: string }>;
+  available?: boolean;
+  availability?: boolean | { available?: boolean; status?: string };
+  options?: unknown[];
+  [key: string]: unknown;
+};
+
 async function loadSecrets(env: Record<string, string>): Promise<Secrets> {
   const required = ['HUBRISE_CLIENT_ID', 'HUBRISE_CLIENT_SECRET', 'HUBRISE_STATE_SECRET'] as const;
   for (const key of required) if (!env[key]) throw new Error(`Missing server secret: ${key}`);
@@ -58,13 +77,58 @@ async function requireUser(req: Request, env: Record<string, string>) {
   return data.user.id;
 }
 
+function collectProducts(value: unknown, result: HubRiseProduct[] = [], seen = new Set<unknown>()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return result;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) collectProducts(item, result, seen);
+    return result;
+  }
+  const record = value as Record<string, unknown>;
+  const looksLikeProduct = Boolean(
+    (record.id || record.ref || record.sku_ref) &&
+    (record.name || record.product_name) &&
+    (record.price !== undefined || record.prices || record.variations),
+  );
+  if (looksLikeProduct) result.push(record as HubRiseProduct);
+  for (const [key, child] of Object.entries(record)) {
+    if (['metadata', 'pagination'].includes(key)) continue;
+    collectProducts(child, result, seen);
+  }
+  return result;
+}
+
+function parsePrice(product: HubRiseProduct) {
+  const raw = product.price ?? product.prices?.[0]?.price ?? product.variations?.[0]?.price ?? 0;
+  const numeric = typeof raw === 'number' ? raw : Number.parseFloat(String(raw).replace(',', '.').replace(/[^\d.-]/g, ''));
+  if (!Number.isFinite(numeric)) return 0;
+  return numeric > 100 ? numeric / 100 : numeric;
+}
+
+function productAvailable(product: HubRiseProduct) {
+  if (typeof product.available === 'boolean') return product.available;
+  if (typeof product.availability === 'boolean') return product.availability;
+  if (product.availability && typeof product.availability === 'object') {
+    if (typeof product.availability.available === 'boolean') return product.availability.available;
+    if (product.availability.status) return product.availability.status !== 'unavailable';
+  }
+  return true;
+}
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  });
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
     const env = Deno.env.toObject();
     const secrets = await loadSecrets(env);
-    const body = await req.json().catch(() => ({})) as { restaurantId?: string; code?: string; state?: string };
+    const body = await req.json().catch(() => ({})) as { restaurantId?: string; code?: string; state?: string; action?: string };
     const url = new URL(req.url);
     const action = url.searchParams.get('action') || body.action || 'connect';
 
@@ -79,7 +143,7 @@ Deno.serve(async (req) => {
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('state', createState(body.restaurantId, secrets.HUBRISE_STATE_SECRET));
 
-      return new Response(JSON.stringify({ url: authUrl.toString() }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ url: authUrl.toString() });
     }
 
     if (action === 'callback') {
@@ -121,7 +185,7 @@ Deno.serve(async (req) => {
 
       if (error) throw new Error(error.message);
 
-      return new Response(JSON.stringify({ success: true, restaurantId: parsed.restaurantId }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      return jsonResponse({ success: true, restaurantId: parsed.restaurantId });
     }
 
     if (action === 'status') {
@@ -133,7 +197,7 @@ Deno.serve(async (req) => {
         .eq('restaurant_id', body.restaurantId)
         .maybeSingle();
       if (error) throw new Error(error.message);
-      return new Response(JSON.stringify({
+      return jsonResponse({
         connected: data?.status === 'connected',
         status: data?.status || 'disconnected',
         lastSyncAt: data?.last_sync_at || null,
@@ -141,12 +205,88 @@ Deno.serve(async (req) => {
         accountId: data?.account_id || null,
         locationId: data?.location_id || null,
         catalogId: data?.catalog_id || null,
-      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      });
+    }
+
+    if (action === 'sync_catalog') {
+      if (!body.restaurantId) throw new Error('restaurantId required');
+      const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+      const { data: connection, error: connectionError } = await supabase
+        .from('restaurant_hubrise_connections')
+        .select('access_token, status')
+        .eq('restaurant_id', body.restaurantId)
+        .maybeSingle();
+      if (connectionError) throw new Error(connectionError.message);
+      if (!connection?.access_token || connection.status !== 'connected') throw new Error('HubRise n’est pas connecté');
+
+      const catalogResponse = await fetch('https://api.hubrise.com/v1/location/catalogs', {
+        headers: { 'X-Access-Token': connection.access_token, Accept: 'application/json' },
+      });
+      if (!catalogResponse.ok) throw new Error(`HubRise catalog error: ${await catalogResponse.text()}`);
+      const catalogPayload = await catalogResponse.json();
+      const catalogs = Array.isArray(catalogPayload) ? catalogPayload : (catalogPayload as { data?: unknown[] }).data ?? [catalogPayload];
+      const catalog = catalogs[0] as Record<string, unknown> | undefined;
+      const catalogId = String(catalog?.id ?? catalog?.ref ?? '');
+      const products = collectProducts(catalogPayload);
+      const rows = products
+        .filter((product, index, all) => product.id || product.ref || product.sku_ref ? all.findIndex(candidate => (candidate.id ?? candidate.ref ?? candidate.sku_ref) === (product.id ?? product.ref ?? product.sku_ref)) === index : false)
+        .map((product, index) => ({
+          restaurant_id: body.restaurantId,
+          product_id: String(product.id ?? product.ref ?? product.sku_ref),
+          hubrise_id: String(product.id ?? product.ref ?? product.sku_ref),
+          sku_ref: product.sku_ref ?? product.ref ?? null,
+          name: product.name ?? product.product_name ?? 'Produit sans nom',
+          category: product.category_name ?? product.category ?? 'Autres',
+          price: parsePrice(product),
+          available: productAvailable(product),
+          display_order: index,
+          source: 'hubrise',
+          availability: product.availability ?? {},
+          options: product.options ?? [],
+          data: product,
+        }));
+
+      if (rows.length > 0) {
+        const { error } = await supabase.from('restaurant_products').upsert(rows, { onConflict: 'restaurant_id,hubrise_id' });
+        if (error) throw new Error(`Import catalogue: ${error.message}`);
+      }
+      const { error: updateError } = await supabase
+        .from('restaurant_hubrise_connections')
+        .update({ last_sync_at: new Date().toISOString(), catalog_id: catalogId || null, status: 'connected', last_error: null })
+        .eq('restaurant_id', body.restaurantId);
+      if (updateError) throw new Error(updateError.message);
+      return jsonResponse({ success: true, productsImported: rows.length, catalogId: catalogId || null });
+    }
+
+    if (action === 'send_order') {
+      if (!body.restaurantId) throw new Error('restaurantId required');
+      const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+      const { data: connection } = await supabase
+        .from('restaurant_hubrise_connections')
+        .select('access_token')
+        .eq('restaurant_id', body.restaurantId)
+        .maybeSingle();
+      if (!connection?.access_token) throw new Error('HubRise n’est pas connecté');
+      const ref = `DV-${randomBytes(5).toString('hex').toUpperCase()}`;
+      const orderResponse = await fetch('https://api.hubrise.com/v1/location/orders', {
+        method: 'POST',
+        headers: { 'X-Access-Token': connection.access_token, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          status: 'new',
+          private_ref: ref,
+          customer: { first_name: 'DriveVoice', last_name: 'Test' },
+          items: [{ product_name: 'Commande test DriveVoice', price: '0.00 EUR', subtotal: '0.00 EUR', quantity: '1.0' }],
+          total: '0.00 EUR',
+        }),
+      });
+      if (!orderResponse.ok) throw new Error(`HubRise order error: ${await orderResponse.text()}`);
+      const order = await orderResponse.json().catch(() => ({})) as { id?: string };
+      return jsonResponse({ success: true, orderId: order.id ?? null, ref });
     }
 
     throw new Error('Unknown action');
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return new Response(JSON.stringify({ error: message }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return jsonResponse({ error: message }, 400);
   }
 });

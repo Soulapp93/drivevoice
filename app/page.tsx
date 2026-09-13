@@ -665,6 +665,29 @@ type CatalogProduct = {
   displayOrder?: number;
 };
 
+const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+
+function mapRestaurantProduct(product: RestaurantProductInfo, index: number): CatalogProduct {
+  const source = product.data ?? {};
+  const sourceValue = (key: string) => source[key];
+  const numericId = Number.parseInt(product.product_id.replace(/\D/g, '').slice(-8), 10);
+  const imageUrl = sourceValue('image_url');
+  return {
+    id: Number.isFinite(numericId) ? numericId : index + 1,
+    productId: product.product_id,
+    name: product.name ?? String(sourceValue('name') ?? 'Produit sans nom'),
+    detail: String(sourceValue('description') ?? sourceValue('detail') ?? ''),
+    emoji: '🍽️',
+    imageUrl: typeof imageUrl === 'string' ? imageUrl : undefined,
+    category: product.category ?? String(sourceValue('category_name') ?? sourceValue('category') ?? 'Autres'),
+    price: Number(product.price ?? 0),
+    posCode: String(sourceValue('sku_ref') ?? product.product_id),
+    available: product.available,
+    productType: 'simple',
+    displayOrder: product.display_order,
+  };
+}
+
 const workspaceTabs: Array<{ id: WorkspaceTab; label: string; short: string; icon: string }> = [
   { id: 'order', label: 'Écran de commande', short: 'Commande', icon: '◉' },
   { id: 'dashboard', label: 'Pilotage', short: 'Pilotage', icon: '▥' },
@@ -1373,7 +1396,7 @@ function OrderHistory({ orders, selectedId, onSelect, onClose }: { orders: Array
   return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-4 md:p-8"><div className="mx-auto max-w-6xl rounded-[28px] bg-[#f4f6f1] shadow-2xl"><div className="flex items-start justify-between border-b border-[#e1e6df] bg-white p-6 md:p-8"><div><p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">Pilotage des ventes</p><h2 className="mt-2 text-3xl font-black">Toutes les commandes</h2><p className="mt-2 text-sm text-[#738078]">Filtrez, ouvrez une commande et consultez sa conversation complète.</p></div><button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-xl bg-[#f0f3ee] text-xl font-black">×</button></div><div className="grid gap-5 p-5 md:grid-cols-[250px_1fr] md:p-8"><aside className="rounded-2xl bg-white p-5"><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Période</p><div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-1">{['jour', 'mois', 'année', 'toutes'].map((item) => <button key={item} onClick={() => setPeriod(item)} className={`rounded-xl px-4 py-3 text-left text-xs font-black capitalize ${period === item ? 'bg-[#0b1f14] text-white' : 'bg-[#f3f5f1] text-[#68736a]'}`}>{item === 'toutes' ? 'Toutes les dates' : `Par ${item}`}</button>)}</div>{period !== 'toutes' && <label className="mt-5 block text-xs font-black text-[#68736a]">Sélectionner une date<input type={period === 'jour' ? 'date' : period === 'mois' ? 'month' : 'number'} min={period === 'année' ? '2020' : undefined} max={period === 'année' ? '2100' : undefined} value={period === 'année' ? date.slice(0, 4) : period === 'mois' ? date.slice(0, 7) : date} onChange={(event) => setDate(period === 'année' ? `${event.target.value}-01-01` : period === 'mois' ? `${event.target.value}-01` : event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-3 py-3 text-sm" /></label>}<div className="mt-6 rounded-2xl bg-[#e8f6eb] p-4"><p className="text-2xl font-black text-[#248b4a]">{filtered.length}</p><p className="mt-1 text-xs font-bold text-[#55745d]">commandes affichées</p></div></aside><section className="min-w-0">{selected ? <div><button onClick={() => onSelect('')} className="mb-4 text-xs font-black text-[#ff5a36]">← Retour à la liste</button><div className="grid gap-5 lg:grid-cols-[1fr_360px]"><article className="rounded-2xl bg-white p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Commande</p><h3 className="mt-2 text-2xl font-black">{selected.id}</h3><p className="mt-1 text-xs text-[#7c887f]">{selected.date} · {selected.time} · {selected.channel}</p></div><span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-xs font-black text-[#27894a]">● {selected.status}</span></div><div className="mt-7"><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Transcription de la conversation</p><div className="mt-4 space-y-3">{selected.transcript.map(([speaker, text], index) => <div key={index} className={`rounded-2xl p-4 text-sm ${speaker === 'Client' ? 'bg-[#fff1e8]' : 'bg-[#eef5ef]'}`}><p className="mb-1 text-[10px] font-black uppercase tracking-widest text-[#89948b]">{speaker}</p>{text}</div>)}</div></div></article><aside className="rounded-2xl bg-[#0b1f14] p-6 text-white"><p className="text-xs font-black uppercase tracking-widest text-[#ffc647]">Détails opérationnels</p><div className="mt-6 space-y-4">{[['Montant total', selected.total], ['Temps de prise', selected.duration], ['Canal', selected.channel], ['Articles', String(selected.items.length)]].map(([label, value]) => <div key={label} className="flex justify-between border-b border-white/10 pb-3 text-sm"><span className="text-white/55">{label}</span><strong>{value}</strong></div>)}</div><p className="mt-7 text-xs font-black uppercase tracking-widest text-[#ffc647]">Commande client</p><ul className="mt-3 space-y-2 text-sm text-white/75">{selected.items.map((item) => <li key={item}>✓ {item}</li>)}</ul></aside></div></div> : <div className="overflow-hidden rounded-2xl bg-white"><div className="border-b border-[#edf0eb] px-5 py-4 text-xs font-black uppercase tracking-widest text-[#89948b]">Historique des commandes</div>{filtered.length ? <div className="divide-y divide-[#edf0eb]">{filtered.map((order) => <button key={order.id} onClick={() => onSelect(order.id)} className="grid w-full grid-cols-[1fr_1fr_1fr] items-center gap-3 px-5 py-5 text-left transition hover:bg-[#fafbf8] md:grid-cols-[1.2fr_1fr_1fr_1fr_1fr]"><span className="font-black">{order.id}</span><span className="text-xs text-[#7c887f]">{order.date} · {order.time}</span><span className="text-xs font-bold">{order.channel}</span><span className="font-black">{order.total}</span><span className="text-xs font-black text-[#27894a]">● {order.status}</span></button>)}</div> : <div className="p-12 text-center text-sm text-[#7b887f]">Aucune commande pour cette période.</div>}</div>}</section></div></div></div>;
 }
 
-function IntegrationsPanel() {
+function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise<void> }) {
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success'>('idle');
   const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [hubriseMessage, setHubriseMessage] = useState('');
@@ -1381,7 +1404,7 @@ function IntegrationsPanel() {
   const [productsCount, setProductsCount] = useState<number | null>(null);
   const [orderTestState, setOrderTestState] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
   const [orderTestMessage, setOrderTestMessage] = useState('');
-  const restaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+  const restaurantId = demoRestaurantId;
 
   const loadStatus = useCallback(async () => {
     try {
@@ -1462,6 +1485,7 @@ function IntegrationsPanel() {
       setLastSync(new Date().toISOString());
       setHubriseState('connected');
       setHubriseMessage(`${data.productsImported ?? 0} produits synchronisés`);
+      await onCatalogSynced();
     } catch (error) {
       setHubriseState('error');
       setHubriseMessage(error instanceof Error ? error.message : String(error));
@@ -1548,7 +1572,12 @@ function CatalogPanel({ products, setProducts }: { products: CatalogProduct[]; s
   const updateProduct = (id: number, patch: Partial<CatalogProduct>) => setProducts(current => current.map(product => product.id === id ? { ...product, ...patch } : product));
   const addProduct = () => setProducts(current => [...current, { id: Date.now(), productId: `product_${Date.now()}`, name: 'Nouveau produit', detail: 'Description à compléter', emoji: '🍽️', category: 'Menus', price: 0, posCode: `NEW-${current.length + 1}`, available: true }]);
   const save = () => { setSaved(true); window.setTimeout(() => setSaved(false), 1800); };
-  const refresh = () => { setSyncState('refreshing'); window.setTimeout(() => setSyncState('synced'), 900); };
+  const refresh = async () => {
+    setSyncState('refreshing');
+    const rows = await fetchRestaurantProducts(demoRestaurantId);
+    if (rows) setProducts(rows.map(mapRestaurantProduct));
+    setSyncState('synced');
+  };
   return (
     <div>
       <SectionHeading eyebrow="Carte restaurant" title="Catalogue HubRise" description="Consultez la carte importée depuis la caisse de cet établissement. Les produits, prix et disponibilités sont synchronisés avec HubRise en temps réel." action={<div className="flex flex-wrap gap-2"><button onClick={refresh} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-3 text-xs font-black">{syncState === 'refreshing' ? 'Synchronisation…' : '↻ Actualiser'}</button><span className="flex items-center gap-2 rounded-xl bg-[#e5f6e9] px-4 py-3 text-xs font-black text-[#27894a]"><span className="h-2 w-2 rounded-full bg-[#35a85a]" />Synchronisé en direct</span></div>} />
@@ -2290,6 +2319,14 @@ export default function Home() {
   const [authOpen, setAuthOpen] = useState(false);
   const [accountEmail, setAccountEmail] = useState('');
   const [authNotice, setAuthNotice] = useState('');
+  const reloadRestaurantCatalog = useCallback(async () => {
+    const rows = await fetchRestaurantProducts(demoRestaurantId);
+    if (rows) setEnterpriseCatalog(rows.map(mapRestaurantProduct));
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void reloadRestaurantCatalog(), 0);
+    return () => window.clearTimeout(timer);
+  }, [reloadRestaurantCatalog]);
   const active = workspaceTabs.find(tab => tab.id === activeTab) ?? workspaceTabs[0];
   const openAccount = () => {
     setAuthOpen(true);
@@ -2317,7 +2354,7 @@ export default function Home() {
         <button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className={`absolute bottom-6 hidden rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36] lg:block ${sidebarCollapsed ? 'left-3 right-3' : 'left-4 right-4'}`}><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
-        {activeTab === 'order' ? <OrderWorkspace products={enterpriseCatalog} agentWelcome={agentWelcome} agentRules={agentRules} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <DashboardPanel />}{activeTab === 'integrations' && <IntegrationsPanel />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}
+        {activeTab === 'order' ? <OrderWorkspace products={enterpriseCatalog} agentWelcome={agentWelcome} agentRules={agentRules} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <DashboardPanel />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <CatalogPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}
       </main>
       {authOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Créer un compte restaurant"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice restaurants</p><h2 className="mt-2 text-2xl font-black">Créer votre compte</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Recevez un lien sécurisé pour accéder à votre espace restaurant.</p></div><button onClick={() => setAuthOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={createRestaurantAccount} className="mt-7"><label className="text-xs font-black text-[#68736a]">Adresse e-mail professionnelle<input required type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="restaurant@exemple.fr" /></label><button disabled={!isSupabaseConfigured} className="mt-4 w-full rounded-xl bg-[#ff5a36] py-3.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">Recevoir mon lien d’accès</button>{!isSupabaseConfigured && <p className="mt-3 text-xs text-[#b26b00]">L’authentification sera disponible après configuration Supabase.</p>}{authNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{authNotice}</p>}</form><p className="mt-6 text-center text-[10px] text-[#98a099]">Connexion sans mot de passe · lien à usage unique</p></div></div>}
     </div>
