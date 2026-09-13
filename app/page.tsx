@@ -473,11 +473,14 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         method: 'POST',
         headers: {
           'Content-Type': 'application/sdp',
-          ...(sessionData.session?.access_token ? { Authorization: `Bearer ${sessionData.session.access_token}` } : {}),
+          Authorization: `Bearer ${sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
         },
         body: offer.sdp,
       });
-      if (!response.ok) throw new Error(`realtime-${response.status}`);
+      if (!response.ok) {
+        const errorBody = await response.text().catch(() => '');
+        throw new Error(errorBody || `realtime-${response.status}`);
+      }
       const answerSdp = await response.text();
       await peer.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     } catch (error) {
