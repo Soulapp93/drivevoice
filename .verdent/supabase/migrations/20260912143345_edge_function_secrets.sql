@@ -27,7 +27,7 @@ values (
     'HUBRISE_CLIENT_ID', '428772282323.clients.hubrise.com',
     'HUBRISE_CLIENT_SECRET', '2fecd728c1d99d4bb8688684e547aaf8e570627ab686b19a075b1194890e8a5f',
     'HUBRISE_STATE_SECRET', 'drivevoice-hubrise-state-secret-demo-replace-in-production',
-    'HUBRISE_REDIRECT_URI', 'https://1f22a1ba-5173-10-base.preview.verdent.ai/api/hubrise/callback'
+    'HUBRISE_REDIRECT_URI', 'https://projet-drive-ia-fast-food-u1fs.verdent.app/api/hubrise/callback'
   )
 )
 on conflict (function_name)
