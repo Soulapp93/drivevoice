@@ -668,20 +668,21 @@ type CatalogProduct = {
 const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
 function mapRestaurantProduct(product: RestaurantProductInfo, index: number): CatalogProduct {
-  const source = product.data ?? {};
+  const productId = String(product.product_id ?? product.id ?? `hubrise-${index}`);
+  const source = product.data && typeof product.data === 'object' ? product.data : {};
   const sourceValue = (key: string) => source[key];
-  const numericId = Number.parseInt(product.product_id.replace(/\D/g, '').slice(-8), 10);
+  const numericId = Number.parseInt(productId.replace(/\D/g, '').slice(-8), 10);
   const imageUrl = sourceValue('image_url');
   return {
     id: Number.isFinite(numericId) ? numericId : index + 1,
-    productId: product.product_id,
+    productId,
     name: product.name ?? String(sourceValue('name') ?? 'Produit sans nom'),
     detail: String(sourceValue('description') ?? sourceValue('detail') ?? ''),
     emoji: '🍽️',
     imageUrl: typeof imageUrl === 'string' ? imageUrl : undefined,
     category: product.category ?? String(sourceValue('category_name') ?? sourceValue('category') ?? 'Autres'),
     price: Number(product.price ?? 0),
-    posCode: String(sourceValue('sku_ref') ?? product.product_id),
+    posCode: String(sourceValue('sku_ref') ?? productId),
     available: product.available,
     productType: 'simple',
     displayOrder: product.display_order,
@@ -2327,13 +2328,14 @@ function AgentPanel({ welcome, setWelcome }: { welcome: string; setWelcome: Reac
 export default function Home() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('order');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [enterpriseCatalog, setEnterpriseCatalog] = useState<CatalogProduct[]>(initialCatalog);
+  const [enterpriseCatalog, setEnterpriseCatalog] = useState<CatalogProduct[]>([]);
   const [agentWelcome, setAgentWelcome] = useState("Bonjour et bienvenue chez Burger King Paris République. Que puis-je préparer pour vous aujourd'hui ?");
   const [agentRules, setAgentRules] = useState<Array<[string, boolean]>>(initialAgentRules);
   const [authOpen, setAuthOpen] = useState(false);
   const [accountEmail, setAccountEmail] = useState('');
   const [authNotice, setAuthNotice] = useState('');
   const reloadRestaurantCatalog = useCallback(async () => {
+    setEnterpriseCatalog([]);
     const rows = await fetchRestaurantProducts(demoRestaurantId);
     if (rows) setEnterpriseCatalog(rows.map(mapRestaurantProduct));
   }, []);
