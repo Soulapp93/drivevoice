@@ -232,7 +232,25 @@ Deno.serve(async (req) => {
         headers: { 'X-Access-Token': connection.access_token, Accept: 'application/json' },
       });
       if (!detailResponse.ok) throw new Error(`HubRise catalog detail error: ${await detailResponse.text()}`);
-      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>>; option_lists?: Array<Record<string, unknown>>; deals?: Array<Record<string, unknown>> } };
+      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>>; option_lists?: Array<Record<string, unknown>>; deals?: Array<Record<string, unknown>>; variants?: Array<Record<string, unknown>>; discounts?: Array<Record<string, unknown>>; charges?: Array<Record<string, unknown>> } };
+      const catalogData = detailPayload.data ?? {};
+      const deals = catalogData.deals ?? [];
+      const discounts = catalogData.discounts ?? [];
+      const charges = catalogData.charges ?? [];
+      const variants = catalogData.variants ?? [];
+      const { error: snapshotError } = await supabase.from('restaurant_hubrise_catalogs').upsert({
+        restaurant_id: body.restaurantId,
+        hubrise_catalog_id: catalogId,
+        catalog_name: catalogId,
+        catalog_data: detailPayload,
+        variants,
+        deals,
+        discounts,
+        charges,
+        synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'restaurant_id' });
+      if (snapshotError) throw new Error(`Catalog snapshot: ${snapshotError.message}`);
       const categoryNames = new Map(
         (detailPayload.data?.categories ?? []).flatMap(category => [
           [String(category.id ?? ''), category.name ?? 'Autres'],
@@ -254,6 +272,11 @@ Deno.serve(async (req) => {
           description: product.description,
           category: categoryNames.get(String(product.category_id ?? product.category_ref ?? '')) ?? 'Autres',
           available: !(Array.isArray(sku.tags) && sku.tags.includes('hidden')),
+          product_type: 'sku',
+          catalog_ref: String(product.ref ?? product.id ?? ''),
+          parent_ref: String(product.ref ?? product.id ?? ''),
+          rules: { tags: sku.tags ?? [], restrictions: sku.restrictions ?? [] },
+          price_by_variant: sku.price_overrides ?? sku.prices ?? {},
           optionGroups: (Array.isArray(sku.option_list_refs) ? sku.option_list_refs : []).map(ref => {
             const optionList = optionListsByRef.get(String(ref)) ?? {};
             const rawOptions = Array.isArray(optionList.options) ? optionList.options as Array<Record<string, unknown>> : [];
@@ -288,11 +311,37 @@ Deno.serve(async (req) => {
           source: 'hubrise',
           availability: product.availability ?? {},
           options: product.options ?? [],
+          product_type: product.product_type ?? 'sku',
+          catalog_ref: String(product.catalog_ref ?? product.id ?? ''),
+          parent_ref: String(product.parent_ref ?? product.id ?? ''),
+          rules: product.rules ?? {},
+          price_by_variant: product.price_by_variant ?? {},
           data: product,
         }));
+      const dealRows = deals.map((deal, index) => ({
+        restaurant_id: body.restaurantId,
+        product_id: String(deal.ref ?? deal.id ?? `deal-${index}`),
+        hubrise_id: `deal:${String(deal.ref ?? deal.id ?? index)}`,
+        sku_ref: String(deal.ref ?? deal.id ?? `deal-${index}`),
+        name: String(deal.name ?? 'Menu'),
+        category: categoryNames.get(String(deal.category_ref ?? '')) ?? 'Menus',
+        price: parsePrice(deal as HubRiseProduct),
+        available: !(Array.isArray(deal.tags) && deal.tags.includes('hidden')),
+        display_order: products.length + index,
+        source: 'hubrise',
+        product_type: 'deal',
+        catalog_ref: catalogId,
+        parent_ref: String(deal.ref ?? deal.id ?? `deal-${index}`),
+        rules: { items: deal.items ?? [], tags: deal.tags ?? [], restrictions: deal.restrictions ?? [] },
+        price_by_variant: deal.price_overrides ?? deal.prices ?? {},
+        availability: {},
+        options: [],
+        data: deal,
+      }));
+      const allRows = [...rows, ...dealRows];
 
-      if (rows.length > 0) {
-        const { error } = await supabase.from('restaurant_products').upsert(rows, { onConflict: 'restaurant_id,hubrise_id' });
+      if (allRows.length > 0) {
+        const { error } = await supabase.from('restaurant_products').upsert(allRows, { onConflict: 'restaurant_id,hubrise_id' });
         if (error) throw new Error(`Import catalogue: ${error.message}`);
       }
       const { error: updateError } = await supabase
@@ -300,7 +349,7 @@ Deno.serve(async (req) => {
         .update({ last_sync_at: new Date().toISOString(), catalog_id: catalogId || null, status: 'connected', last_error: null })
         .eq('restaurant_id', body.restaurantId);
       if (updateError) throw new Error(updateError.message);
-      return jsonResponse({ success: true, productsImported: rows.length, catalogId: catalogId || null });
+      return jsonResponse({ success: true, productsImported: allRows.length, dealsImported: dealRows.length, catalogId: catalogId || null });
     }
 
     if (action === 'send_order') {

@@ -33,6 +33,7 @@ export interface RestaurantProductInfo {
   available: boolean;
   display_order: number;
   data: Record<string, unknown> | null;
+  product_type?: 'sku' | 'deal';
 }
 
 interface BrandJoin {

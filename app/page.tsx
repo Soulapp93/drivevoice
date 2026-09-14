@@ -666,7 +666,7 @@ type CatalogProduct = {
   available: boolean;
   ingredients?: string[];
   ingredientSettings?: ProductIngredient[];
-  productType?: 'simple' | 'configurable' | 'menu' | 'bundle';
+  productType?: 'simple' | 'configurable' | 'menu' | 'bundle' | 'deal';
   variants?: ProductVariant[];
   optionGroups?: ProductOptionGroup[];
   modifiers?: ProductModifier[];
@@ -724,7 +724,7 @@ function mapRestaurantProduct(product: RestaurantProductInfo, index: number): Ca
     price: Number(product.price ?? 0),
     posCode: String(sourceValue('sku_ref') ?? productId),
     available: product.available,
-    productType: optionGroups.length ? 'configurable' : 'simple',
+    productType: product.product_type === 'deal' ? 'deal' : optionGroups.length ? 'configurable' : 'simple',
     optionGroups,
     displayOrder: product.display_order,
   };
