@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './client';
+import { supabaseAnonKey } from './client';
 import type { SyncResult } from './sync';
 
 /**
@@ -100,16 +101,15 @@ export async function fetchRestaurants(): Promise<RestaurantInfo[] | null> {
 }
 
 export async function fetchRestaurantProducts(restaurantId: string): Promise<RestaurantProductInfo[] | null> {
-  if (!isSupabaseConfigured || !supabase) return null;
   try {
-    const { data, error } = await supabase
-      .from('restaurant_products')
-      .select('id, product_id, name, category, price, available, display_order, data')
-      .eq('restaurant_id', restaurantId)
-      .order('display_order');
-
-    if (error) throw error;
-    return (data ?? []) as unknown as RestaurantProductInfo[];
+    const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: supabaseAnonKey, Authorization: `Bearer ${supabaseAnonKey}` },
+      body: JSON.stringify({ restaurantId }),
+    });
+    const payload = await response.json().catch(() => ({})) as { products?: RestaurantProductInfo[]; error?: string };
+    if (!response.ok) throw new Error(payload.error ?? 'Catalogue indisponible');
+    return payload.products ?? [];
   } catch (err: unknown) {
     console.error('[fetchRestaurantProducts]', err);
     return null;
