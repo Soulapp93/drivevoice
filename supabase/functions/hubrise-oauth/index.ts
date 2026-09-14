@@ -232,14 +232,19 @@ Deno.serve(async (req) => {
         headers: { 'X-Access-Token': connection.access_token, Accept: 'application/json' },
       });
       if (!detailResponse.ok) throw new Error(`HubRise catalog detail error: ${await detailResponse.text()}`);
-      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>> } };
+      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>>; option_lists?: Array<Record<string, unknown>>; deals?: Array<Record<string, unknown>> } };
       const categoryNames = new Map(
         (detailPayload.data?.categories ?? []).flatMap(category => [
           [String(category.id ?? ''), category.name ?? 'Autres'],
           [String(category.ref ?? ''), category.name ?? 'Autres'],
         ] as Array<[string, string]>),
       );
-      const products = (detailPayload.data?.products ?? []).flatMap(product => {
+      const optionLists = detailPayload.data?.option_lists ?? [];
+      const optionListsByRef = new Map(optionLists.flatMap(optionList => {
+        const ref = String(optionList.ref ?? optionList.id ?? '');
+        return ref ? [[ref, optionList] as [string, Record<string, unknown>]] : [];
+      }));
+      const products: HubRiseProduct[] = (detailPayload.data?.products ?? []).flatMap(product => {
         const skus = Array.isArray(product.skus) ? product.skus as Array<Record<string, unknown>> : [];
         return skus.map(sku => ({
           ...sku,
@@ -249,7 +254,24 @@ Deno.serve(async (req) => {
           description: product.description,
           category: categoryNames.get(String(product.category_id ?? product.category_ref ?? '')) ?? 'Autres',
           available: !(Array.isArray(sku.tags) && sku.tags.includes('hidden')),
-        }));
+          optionGroups: (Array.isArray(sku.option_list_refs) ? sku.option_list_refs : []).map(ref => {
+            const optionList = optionListsByRef.get(String(ref)) ?? {};
+            const rawOptions = Array.isArray(optionList.options) ? optionList.options as Array<Record<string, unknown>> : [];
+            return {
+              name: String(optionList.name ?? ref),
+              question: `Choisissez ${String(optionList.name ?? ref).toLowerCase()}`,
+              required: Number(optionList.min_selections ?? 0) > 0,
+              min: Number(optionList.min_selections ?? 0),
+              max: Number(optionList.max_selections ?? 1),
+              options: rawOptions.map(option => ({
+                name: String(option.name ?? option.ref ?? 'Option'),
+                ref: String(option.ref ?? option.id ?? ''),
+                priceDelta: parsePrice({ price: option.price as string | number | undefined }),
+                available: !(Array.isArray(option.tags) && option.tags.includes('hidden')),
+              })),
+            };
+          }),
+        })) as HubRiseProduct[];
       });
       const rows = products
         .filter((product, index, all) => product.id || product.ref || product.sku_ref ? all.findIndex(candidate => (candidate.id ?? candidate.ref ?? candidate.sku_ref) === (product.id ?? product.ref ?? product.sku_ref)) === index : false)

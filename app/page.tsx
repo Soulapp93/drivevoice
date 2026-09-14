@@ -6,7 +6,7 @@ import { fetchBrandsFromDb, syncBrandsToDb, type MasterBrandInput } from '@/lib/
 import { createRestaurant, deleteRestaurant, fetchRestaurantProducts, fetchRestaurants, updateRestaurantProduct, type RestaurantInfo, type RestaurantProductInfo } from '@/lib/supabase/restaurants';
 
 type ProductId = string;
-type OrderItem = { id: number; productId: ProductId; name: string; detail: string; price: number; emoji: string };
+type OrderItem = { id: number; productId: ProductId; name: string; detail: string; price: number; emoji: string; customizations?: string[] };
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'error';
 type TranscriptMessage = { id: string; speaker: 'client' | 'agent'; text: string; status: 'partial' | 'final'; timestamp: number };
 type RealtimeEvent = {
@@ -213,7 +213,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     let output: { ok: boolean; item_count?: number; total?: number; error?: string };
     try {
       const parsed = JSON.parse(rawArguments ?? '{}') as {
-        items?: Array<{ product_id?: ProductId; quantity?: number }>;
+        items?: Array<{ product_id?: ProductId; quantity?: number; selections?: Array<{ group?: string; options?: string[] }> }>;
         status?: 'editing' | 'ready_to_confirm' | 'confirmed';
       };
       const nextItems: OrderItem[] = [];
@@ -221,8 +221,20 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         const product = products.find((entry) => entry.productId === requested.product_id && entry.available);
         const quantity = Math.min(20, Math.max(0, Math.trunc(Number(requested.quantity) || 0)));
         if (!product) continue;
+        const selections = requested.selections ?? [];
+        const selectedOptions = selections.flatMap(selection => {
+          const group = product.optionGroups?.find(entry => entry.name.toLowerCase() === String(selection.group ?? '').toLowerCase());
+          return (selection.options ?? []).map(optionName => group?.options.find(option => option.name.toLowerCase() === optionName.toLowerCase() || option.posCode === optionName)).filter((option): option is ProductOption => Boolean(option && option.available));
+        });
+        const invalidRequiredGroup = product.optionGroups?.some(group => {
+          const selectedCount = selections.find(selection => selection.group?.toLowerCase() === group.name.toLowerCase())?.options?.length ?? 0;
+          return group.required && (selectedCount < group.min || selectedCount > group.max);
+        });
+        if (invalidRequiredGroup) continue;
+        const customizationPrice = selectedOptions.reduce((sum, option) => sum + option.priceDelta, 0);
+        const customizationLabels = selectedOptions.map(option => option.name);
         for (let index = 0; index < quantity; index += 1) {
-          nextItems.push({ ...product, id: nextId.current++ });
+          nextItems.push({ ...product, id: nextId.current++, price: product.price + customizationPrice, customizations: customizationLabels });
         }
       }
       setItems(nextItems);
@@ -422,13 +434,16 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         setListening(microphoneReadyRef.current);
         setAgentText('Bonjour, je vous accueille…');
         const activeProducts = products.filter(product => product.available);
-        const productKnowledge = activeProducts.map(product => `- ${product.productId}: ${product.name} — ${product.detail} — ${money.format(product.price)}`).join('\n');
+        const productKnowledge = activeProducts.map(product => {
+          const groups = product.optionGroups?.map(group => `${group.name} [${group.required ? 'obligatoire' : 'facultatif'}, ${group.min}-${group.max}] : ${group.options.filter(option => option.available).map(option => `${option.name}${option.priceDelta ? ` (+${money.format(option.priceDelta)})` : ''}`).join(', ')}`).join(' | ') ?? '';
+          return `- ${product.productId}: ${product.name} — ${product.detail} — ${money.format(product.price)}${groups ? ` — CHOIX: ${groups}` : ''}`;
+        }).join('\n');
         const behaviorRules = agentRules.filter(([, enabled]) => enabled).map(([rule]) => `- ${rule}`).join('\n');
         sendEvent({
           type: 'session.update',
           session: {
             type: 'realtime',
-            instructions: `Tu es DriveVoice, équipier du drive ${brand.name}. Parle en français avec des phrases courtes.\n\nMESSAGE D'ACCUEIL\n${agentWelcome}\n\nCATALOGUE DISPONIBLE\n${productKnowledge}\n\nRÈGLES MÉTIER\n${behaviorRules}\n\nAprès chaque modification, appelle update_order avec le panier complet. N'invente jamais un produit, un prix ou une disponibilité.`,
+            instructions: `Tu es DriveVoice, équipier du drive ${brand.name}. Parle en français avec des phrases courtes. Utilise uniquement le catalogue ci-dessous. Pour chaque groupe obligatoire, pose la question et attends le choix. Pour un ingrédient retiré ou ajouté, utilise uniquement une option réellement disponible. Ne confirme jamais une commande tant que les choix obligatoires ne sont pas complets.\n\nMESSAGE D'ACCUEIL\n${agentWelcome}\n\nCATALOGUE DISPONIBLE\n${productKnowledge}\n\nRÈGLES MÉTIER\n${behaviorRules}\n\nAprès chaque modification, appelle update_order avec le panier complet, en transmettant les choix dans selections. N'invente jamais un produit, un prix, une option ou une disponibilité.`,
             tools: [{
               type: 'function',
               name: 'update_order',
@@ -436,7 +451,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
               parameters: {
                 type: 'object',
                 properties: {
-                  items: { type: 'array', items: { type: 'object', properties: { product_id: { type: 'string', enum: activeProducts.map(product => product.productId) }, quantity: { type: 'integer', minimum: 1, maximum: 20 } }, required: ['product_id', 'quantity'], additionalProperties: false } },
+                  items: { type: 'array', items: { type: 'object', properties: { product_id: { type: 'string', enum: activeProducts.map(product => product.productId) }, quantity: { type: 'integer', minimum: 1, maximum: 20 }, selections: { type: 'array', items: { type: 'object', properties: { group: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } }, required: ['group', 'options'], additionalProperties: false } } }, required: ['product_id', 'quantity'], additionalProperties: false } },
                   status: { type: 'string', enum: ['editing', 'ready_to_confirm', 'confirmed'] },
                 },
                 required: ['items', 'status'],
@@ -613,7 +628,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
             <div className="grid flex-1 place-items-center text-center"><div><div className="mx-auto mb-5 grid h-24 w-24 place-items-center rounded-full bg-[#dff6e5] text-4xl">✓</div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#38a55f]">Commande confirmée</p><p className="mt-2 text-7xl font-black tracking-[-.08em]">47</p><p className="mt-4 max-w-xs text-sm leading-relaxed text-[#758077]">Avancez jusqu’à la prochaine fenêtre. Votre commande a été transmise en cuisine.</p></div></div>
           ) : items.length ? (
             <div className="flex-1 space-y-3 overflow-auto py-6">
-              {items.map((item, index) => <div key={item.id} className="group flex items-center gap-4 rounded-2xl border border-[#edf0ea] p-4 transition hover:border-[#d9ded5]"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[#f3f5f0] text-2xl">{item.emoji}</span><div className="min-w-0 flex-1"><p className="truncate font-black">{index + 1}. {item.name}</p><p className="truncate text-xs text-[#8a938b]">{item.detail}</p></div><div className="text-right"><p className="font-black">{money.format(item.price)}</p><button onClick={() => sendTextToAgent(`Retire un ${item.name} de ma commande.`)} className="mt-1 text-[11px] font-bold text-[#ff5a36] opacity-70 hover:opacity-100">Retirer</button></div></div>)}
+              {items.map((item, index) => <div key={item.id} className="group flex items-center gap-4 rounded-2xl border border-[#edf0ea] p-4 transition hover:border-[#d9ded5]"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[#f3f5f0] text-2xl">{item.emoji}</span><div className="min-w-0 flex-1"><p className="truncate font-black">{index + 1}. {item.name}</p><p className="truncate text-xs text-[#8a938b]">{item.detail}</p>{item.customizations?.length ? <p className="mt-1 text-[10px] font-bold text-[#bd5d3d]">{item.customizations.join(' · ')}</p> : null}</div><div className="text-right"><p className="font-black">{money.format(item.price)}</p><button onClick={() => sendTextToAgent(`Retire un ${item.name} de ma commande.`)} className="mt-1 text-[11px] font-bold text-[#ff5a36] opacity-70 hover:opacity-100">Retirer</button></div></div>)}
             </div>
           ) : (
             <div className="grid flex-1 place-items-center text-center"><div className="max-w-[250px]"><div className="mx-auto mb-5 grid h-20 w-20 place-items-center rounded-full bg-[#f3f5f0] text-3xl">🎙️</div><h3 className="text-xl font-black">Prêt à vous écouter</h3><p className="mt-2 text-sm leading-relaxed text-[#7b847d]">Le panier se met à jour pendant votre conversation avec l’agent.</p></div></div>
@@ -671,6 +686,31 @@ function mapRestaurantProduct(product: RestaurantProductInfo, index: number): Ca
   const productId = String(product.product_id ?? product.id ?? `hubrise-${index}`);
   const source = product.data && typeof product.data === 'object' ? product.data : {};
   const sourceValue = (key: string) => source[key];
+  const rawOptionGroups = sourceValue('optionGroups');
+  const optionGroups: ProductOptionGroup[] = Array.isArray(rawOptionGroups)
+    ? rawOptionGroups.map((group, groupIndex) => {
+      const groupRecord = group && typeof group === 'object' ? group as Record<string, unknown> : {};
+      const rawOptions = Array.isArray(groupRecord.options) ? groupRecord.options : [];
+      return {
+        id: groupIndex + 1,
+        name: String(groupRecord.name ?? `Choix ${groupIndex + 1}`),
+        question: String(groupRecord.question ?? `Choisissez ${String(groupRecord.name ?? 'une option').toLowerCase()}`),
+        required: Boolean(groupRecord.required),
+        min: Number(groupRecord.min ?? 0),
+        max: Number(groupRecord.max ?? 1),
+        options: rawOptions.map((option, optionIndex) => {
+          const optionRecord = option && typeof option === 'object' ? option as Record<string, unknown> : {};
+          return {
+            id: optionIndex + 1,
+            name: String(optionRecord.name ?? optionRecord.ref ?? 'Option'),
+            priceDelta: Number(optionRecord.priceDelta ?? 0),
+            posCode: String(optionRecord.ref ?? optionRecord.id ?? ''),
+            available: optionRecord.available !== false,
+          };
+        }),
+      };
+    })
+    : [];
   const numericId = Number.parseInt(productId.replace(/\D/g, '').slice(-8), 10);
   const imageUrl = sourceValue('image_url');
   return {
@@ -684,7 +724,8 @@ function mapRestaurantProduct(product: RestaurantProductInfo, index: number): Ca
     price: Number(product.price ?? 0),
     posCode: String(sourceValue('sku_ref') ?? productId),
     available: product.available,
-    productType: 'simple',
+    productType: optionGroups.length ? 'configurable' : 'simple',
+    optionGroups,
     displayOrder: product.display_order,
   };
 }
@@ -1598,7 +1639,7 @@ function CatalogPanel({ products, setProducts }: { products: CatalogProduct[]; s
       <SectionHeading eyebrow="Carte restaurant" title="Catalogue HubRise" description="Consultez la carte importée depuis la caisse de cet établissement. Les produits, prix et disponibilités sont synchronisés avec HubRise en temps réel." action={<div className="flex flex-wrap gap-2"><button onClick={refresh} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-3 text-xs font-black">{syncState === 'refreshing' ? 'Synchronisation…' : '↻ Actualiser'}</button><span className="flex items-center gap-2 rounded-xl bg-[#e5f6e9] px-4 py-3 text-xs font-black text-[#27894a]"><span className="h-2 w-2 rounded-full bg-[#35a85a]" />Synchronisé en direct</span></div>} />
       <section className={`${panelCard} mb-5 overflow-hidden`}><div className="flex flex-col gap-5 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-7"><div className="flex items-start gap-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black">H</span><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Source de vérité</p><h2 className="mt-1 text-xl font-black">Carte du restaurant · HubRise</h2><p className="mt-2 text-sm text-white/60">Dernière synchronisation il y a quelques secondes · Les modifications de la caisse seront répercutées automatiquement.</p></div></div><div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-right"><p className="text-[10px] font-bold uppercase tracking-widest text-white/45">Établissement</p><p className="mt-1 text-sm font-black">BK Paris République</p></div></div><div className="flex flex-wrap gap-5 border-t border-[#dce9df] px-6 py-4 text-xs font-bold text-[#68776c] md:px-7"><span>✓ Catalogue importé</span><span>✓ Prix synchronisés</span><span>✓ Disponibilités en direct</span><span>✓ Utilisé par l’agent IA</span></div></section>
       <section className={`${panelCard} overflow-hidden`}><div className="flex flex-col gap-4 border-b border-[#e7ebe5] p-5 md:flex-row md:items-center md:justify-between"><div className="flex items-center gap-3"><input aria-label="Rechercher dans le catalogue HubRise" className={`${fieldClass} md:w-80`} placeholder="Rechercher dans le catalogue HubRise…" value={query} onChange={event=>setQuery(event.target.value)} /><span className="rounded-full bg-[#eef2ed] px-3 py-2 text-xs font-black">{products.length} produits</span></div><div className="flex gap-2 text-xs"><span className="rounded-full bg-[#e5f6e9] px-3 py-2 font-black text-[#28894a]">{products.filter(p=>p.available).length} disponibles</span><span className="rounded-full bg-[#f3f4f1] px-3 py-2 font-black text-[#737d75]">{products.filter(p=>!p.available).length} masqués</span></div></div>
-        <div className="overflow-x-auto"><table className="w-full min-w-[850px] text-left"><thead className="bg-[#f8f9f6] text-[10px] font-black uppercase tracking-[.14em] text-[#8f9790]"><tr>{['Produit','Catégorie','Prix TTC','Code POS','Disponibilité'].map(label=><th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{filtered.map(product=><tr key={product.id} className="border-t border-[#edf0eb]"><td className="px-5 py-4"><input aria-label={`Nom de ${product.name}`} className="w-full min-w-48 bg-transparent font-black outline-none focus:text-[#ff5a36]" value={product.name} onChange={event=>updateProduct(product.id,{name:event.target.value})} /></td><td className="px-5 py-4"><select className="rounded-lg border border-[#e0e4de] bg-white px-3 py-2 text-xs font-bold" value={product.category} onChange={event=>updateProduct(product.id,{category:event.target.value})}>{['Menus','Burgers','Poulet','Accompagnements','Boissons','Desserts'].map(c=><option key={c}>{c}</option>)}</select></td><td className="px-5 py-4"><div className="flex items-center gap-1"><input aria-label={`Prix de ${product.name}`} className="w-20 rounded-lg border border-[#e0e4de] px-3 py-2 text-sm font-black" type="number" step="0.1" value={product.price} onChange={event=>updateProduct(product.id,{price:Number(event.target.value)})} /><span className="font-black">€</span></div></td><td className="px-5 py-4"><input aria-label={`Code POS de ${product.name}`} className="rounded-lg bg-[#f3f5f1] px-3 py-2 font-mono text-xs font-bold outline-none" value={product.posCode} onChange={event=>updateProduct(product.id,{posCode:event.target.value})} /></td><td className="px-5 py-4"><button onClick={()=>updateProduct(product.id,{available:!product.available})} className={`flex items-center gap-2 rounded-full px-3 py-2 text-xs font-black ${product.available?'bg-[#e3f6e8] text-[#258848]':'bg-[#eff1ee] text-[#7f8880]'}`}><span className={`h-2 w-2 rounded-full ${product.available?'bg-[#34a759]':'bg-[#a6ada7]'}`} />{product.available?'Disponible':'Masqué'}</button></td></tr>)}</tbody></table></div>
+        <div className="overflow-x-auto"><table className="w-full min-w-[950px] text-left"><thead className="bg-[#f8f9f6] text-[10px] font-black uppercase tracking-[.14em] text-[#8f9790]"><tr>{['Produit','Catégorie HubRise','Prix TTC','Code POS','Configuration','Disponibilité'].map(label=><th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{filtered.map(product=><tr key={product.id} className="border-t border-[#edf0eb]"><td className="px-5 py-4"><input aria-label={`Nom de ${product.name}`} className="w-full min-w-48 bg-transparent font-black outline-none focus:text-[#ff5a36]" value={product.name} onChange={event=>updateProduct(product.id,{name:event.target.value})} /></td><td className="px-5 py-4"><span className="rounded-lg bg-[#f3f5f1] px-3 py-2 text-xs font-bold">{product.category}</span></td><td className="px-5 py-4"><div className="flex items-center gap-1"><input aria-label={`Prix de ${product.name}`} className="w-20 rounded-lg border border-[#e0e4de] px-3 py-2 text-sm font-black" type="number" step="0.1" value={product.price} onChange={event=>updateProduct(product.id,{price:Number(event.target.value)})} /><span className="font-black">€</span></div></td><td className="px-5 py-4"><input aria-label={`Code POS de ${product.name}`} className="rounded-lg bg-[#f3f5f1] px-3 py-2 font-mono text-xs font-bold outline-none" value={product.posCode} onChange={event=>updateProduct(product.id,{posCode:event.target.value})} /></td><td className="px-5 py-4 text-xs font-semibold text-[#69756c]">{product.optionGroups?.length ? `${product.optionGroups.length} groupe${product.optionGroups.length > 1 ? 's' : ''} de choix` : 'Produit simple'}</td><td className="px-5 py-4"><button onClick={()=>updateProduct(product.id,{available:!product.available})} className={`flex items-center gap-2 rounded-full px-3 py-2 text-xs font-black ${product.available?'bg-[#e3f6e8] text-[#258848]':'bg-[#eff1ee] text-[#7f8880]'}`}><span className={`h-2 w-2 rounded-full ${product.available?'bg-[#34a759]':'bg-[#a6ada7]'}`} />{product.available?'Disponible':'Masqué'}</button></td></tr>)}</tbody></table></div>
       </section>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#dfe8e0] bg-[#eef7f0] px-5 py-4 text-xs"><span className="font-black text-[#267d43]">● Catalogue synchronisé avec HubRise</span><span className="font-semibold text-[#6f8073]">Dernière mise à jour il y a quelques secondes · Lecture seule</span></div>
     </div>
