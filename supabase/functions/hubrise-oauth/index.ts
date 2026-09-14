@@ -232,8 +232,8 @@ Deno.serve(async (req) => {
         headers: { 'X-Access-Token': connection.access_token, Accept: 'application/json' },
       });
       if (!detailResponse.ok) throw new Error(`HubRise catalog detail error: ${await detailResponse.text()}`);
-      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>>; option_lists?: Array<Record<string, unknown>>; deals?: Array<Record<string, unknown>>; variants?: Array<Record<string, unknown>>; discounts?: Array<Record<string, unknown>>; charges?: Array<Record<string, unknown>> } };
-      const catalogData = detailPayload.data ?? {};
+      const detailPayload = await detailResponse.json() as { data?: { categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>>; option_lists?: Array<Record<string, unknown>>; deals?: Array<Record<string, unknown>>; variants?: Array<Record<string, unknown>>; discounts?: Array<Record<string, unknown>>; charges?: Array<Record<string, unknown>> }; categories?: Array<{ id?: string; ref?: string; name?: string }>; products?: Array<Record<string, unknown>>; option_lists?: Array<Record<string, unknown>>; deals?: Array<Record<string, unknown>>; variants?: Array<Record<string, unknown>>; discounts?: Array<Record<string, unknown>>; charges?: Array<Record<string, unknown>> };
+      const catalogData = detailPayload.data ?? detailPayload;
       const deals = catalogData.deals ?? [];
       const discounts = catalogData.discounts ?? [];
       const charges = catalogData.charges ?? [];
