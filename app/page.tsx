@@ -1,7 +1,7 @@
 'use client';
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
+import { isSupabaseConfigured, supabase, supabaseAnonKey } from '@/lib/supabase/client';
 import { fetchBrandsFromDb, syncBrandsToDb, type MasterBrandInput } from '@/lib/supabase/sync';
 import { createRestaurant, deleteRestaurant, fetchRestaurantProducts, fetchRestaurants, updateRestaurantProduct, type RestaurantInfo, type RestaurantProductInfo } from '@/lib/supabase/restaurants';
 
@@ -1436,6 +1436,20 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
       setHubriseState('connected');
       window.history.replaceState({}, '', window.location.pathname + window.location.search.replace(/[?&]hubrise=connected[^&]*/, '').replace(/^\?&/, '?'));
       void loadStatus();
+      window.setTimeout(() => {
+        void fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=sync_catalog', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', Authorization: `Bearer ${supabaseAnonKey}` },
+          body: JSON.stringify({ restaurantId }),
+        }).then(async response => {
+          const result = await response.json().catch(() => ({})) as { productsImported?: number };
+          if (response.ok) {
+            setProductsCount(result.productsImported ?? null);
+            setLastSync(new Date().toISOString());
+            await onCatalogSynced();
+          }
+        });
+      }, 0);
     } else if (params.get('hubrise') === 'error') {
       setHubriseState('error');
       setHubriseMessage(decodeURIComponent(params.get('reason') || 'Erreur OAuth HubRise'));
