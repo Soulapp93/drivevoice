@@ -4,6 +4,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { isSupabaseConfigured, supabase, supabaseAnonKey } from '@/lib/supabase/client';
 import { fetchBrandsFromDb, syncBrandsToDb, type MasterBrandInput } from '@/lib/supabase/sync';
 import { createRestaurant, deleteRestaurant, fetchRestaurantProducts, fetchRestaurants, updateRestaurantProduct, type RestaurantInfo, type RestaurantProductInfo } from '@/lib/supabase/restaurants';
+import { calculateCatalogPrice, getCatalogSelectionLabels, validateCatalogSelection, type CatalogSelection } from '@/lib/catalog-rules';
 
 type ProductId = string;
 type OrderItem = { id: number; productId: ProductId; name: string; detail: string; price: number; emoji: string; customizations?: string[] };
@@ -237,17 +238,21 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         const quantity = Math.min(20, Math.max(0, Math.trunc(Number(requested.quantity) || 0)));
         if (!product) continue;
         const selections = requested.selections ?? [];
+        const selectionIds: CatalogSelection = {};
         const selectedOptions = selections.flatMap(selection => {
           const group = product.optionGroups?.find(entry => entry.name.toLowerCase() === String(selection.group ?? '').toLowerCase());
-          return (selection.options ?? []).map(optionName => group?.options.find(option => option.name.toLowerCase() === optionName.toLowerCase() || option.posCode === optionName)).filter((option): option is ProductOption => Boolean(option && option.available));
+          if (!group) return [];
+          const options = (selection.options ?? []).map(optionName => group.options.find(option => option.name.toLowerCase() === optionName.toLowerCase())).filter((option): option is ProductOption => Boolean(option && option.available));
+          selectionIds[group.id] = options.map(option => option.id);
+          return options;
         });
-        const invalidRequiredGroup = product.optionGroups?.some(group => {
-          const selectedCount = selections.find(selection => selection.group?.toLowerCase() === group.name.toLowerCase())?.options?.length ?? 0;
-          return group.required && (selectedCount < group.min || selectedCount > group.max);
-        });
-        if (invalidRequiredGroup) continue;
-        const customizationPrice = selectedOptions.reduce((sum, option) => sum + option.priceDelta, 0);
-        const customizationLabels = selectedOptions.map(option => option.name);
+        const ruleGroups = product.optionGroups ?? [];
+        if (!validateCatalogSelection(ruleGroups, selectionIds).valid) {
+          output = { ok: false, error: 'Certains choix obligatoires ou certaines limites de menu ne sont pas respectés.' };
+          continue;
+        }
+        const customizationPrice = calculateCatalogPrice(0, ruleGroups, selectionIds);
+        const customizationLabels = getCatalogSelectionLabels(ruleGroups, selectionIds);
         for (let index = 0; index < quantity; index += 1) {
           nextItems.push({ ...product, id: nextId.current++, price: product.price + customizationPrice, customizations: customizationLabels });
         }
@@ -1656,13 +1661,10 @@ function CatalogPanel({ products, setProducts }: { products: CatalogProduct[]; s
     setSyncState('synced');
   };
   const selectedPrice = selectedProduct
-    ? selectedProduct.price + (selectedProduct.optionGroups ?? []).flatMap(group => (selectedOptions[group.id] ?? []).map(optionId => group.options.find(option => option.id === optionId)?.priceDelta ?? 0)).reduce((sum, delta) => sum + delta, 0)
+    ? calculateCatalogPrice(selectedProduct.price, selectedProduct.optionGroups ?? [], selectedOptions)
     : 0;
   const canAddSelected = selectedProduct
-    ? (selectedProduct.optionGroups ?? []).every(group => {
-      const count = selectedOptions[group.id]?.length ?? 0;
-      return count >= group.min && count <= group.max;
-    })
+    ? validateCatalogSelection(selectedProduct.optionGroups ?? [], selectedOptions).valid
     : false;
   return (
     <div>

@@ -252,17 +252,17 @@ Deno.serve(async (req) => {
       }, { onConflict: 'restaurant_id' });
       if (snapshotError) throw new Error(`Catalog snapshot: ${snapshotError.message}`);
       const categoryNames = new Map(
-        (detailPayload.data?.categories ?? []).flatMap(category => [
+        (catalogData.categories ?? []).flatMap(category => [
           [String(category.id ?? ''), category.name ?? 'Autres'],
           [String(category.ref ?? ''), category.name ?? 'Autres'],
         ] as Array<[string, string]>),
       );
-      const optionLists = detailPayload.data?.option_lists ?? [];
+      const optionLists = catalogData.option_lists ?? [];
       const optionListsByRef = new Map(optionLists.flatMap(optionList => {
         const ref = String(optionList.ref ?? optionList.id ?? '');
         return ref ? [[ref, optionList] as [string, Record<string, unknown>]] : [];
       }));
-      const products: HubRiseProduct[] = (detailPayload.data?.products ?? []).flatMap(product => {
+      const products: HubRiseProduct[] = (catalogData.products ?? []).flatMap(product => {
         const skus = Array.isArray(product.skus) ? product.skus as Array<Record<string, unknown>> : [];
         return skus.map(sku => ({
           ...sku,
