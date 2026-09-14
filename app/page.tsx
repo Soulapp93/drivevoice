@@ -87,6 +87,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [pricing, setPricing] = useState<{ acceptingOrders: boolean; discountTotal: number; total: number } | null>(null);
   const [customerText, setCustomerText] = useState('');
   const [voiceInput, setVoiceInput] = useState('');
   const [voiceError, setVoiceError] = useState('');
@@ -111,6 +112,20 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
   const nextId = useRef(1);
 
   const total = useMemo(() => items.reduce((sum, item) => sum + item.price, 0), [items]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-pricing', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: `Bearer ${supabaseAnonKey}` },
+        body: JSON.stringify({ restaurantId: demoRestaurantId, subtotal: total }),
+      }).then(async response => {
+        const result = await response.json().catch(() => ({})) as { acceptingOrders?: boolean; discountTotal?: number; total?: number };
+        if (response.ok) setPricing({ acceptingOrders: result.acceptingOrders !== false, discountTotal: result.discountTotal ?? 0, total: result.total ?? total });
+      }).catch(() => setPricing(null));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [total]);
+  const finalTotal = pricing?.total ?? total;
 
   const sendEvent = (event: object) => {
     const channel = dataChannelRef.current;
@@ -613,8 +628,8 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           )}
 
           {!started ? (
-            <button onClick={startOrder} className="relative z-10 flex w-full items-center justify-between rounded-2xl bg-[#ff5a36] px-6 py-5 text-left transition hover:-translate-y-0.5 hover:bg-[#ff6c4d] md:w-[440px]">
-              <span><strong className="block text-lg">Passer ma commande</strong><small className="text-white/70">Autorisez le micro, l’agent démarre en direct</small></span><span className="grid h-12 w-12 place-items-center rounded-full bg-white text-2xl text-[#ff5a36]">●</span>
+            <button onClick={startOrder} disabled={pricing?.acceptingOrders === false} className="relative z-10 flex w-full items-center justify-between rounded-2xl bg-[#ff5a36] px-6 py-5 text-left transition hover:-translate-y-0.5 hover:bg-[#ff6c4d] disabled:cursor-not-allowed disabled:opacity-50 md:w-[440px]">
+              <span><strong className="block text-lg">{pricing?.acceptingOrders === false ? 'Commandes temporairement fermées' : 'Passer ma commande'}</strong><small className="text-white/70">{pricing?.acceptingOrders === false ? 'Le restaurant est actuellement fermé ou en pause.' : 'Autorisez le micro, l’agent démarre en direct'}</small></span><span className="grid h-12 w-12 place-items-center rounded-full bg-white text-2xl text-[#ff5a36]">●</span>
             </button>
           ) : (
             <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-5"><p className="text-xs text-white/45">Vous pouvez parler par-dessus l’agent ou toucher le cercle pour l’interrompre.</p><button onClick={restart} className="text-xs font-bold text-white/60 underline decoration-white/20 underline-offset-4">Recommencer</button></div>
@@ -635,8 +650,8 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           )}
 
           <div className="border-t border-[#e7eae4] pt-6">
-            <div className="flex items-end justify-between"><span className="text-sm font-bold text-[#717a73]">Total TTC</span><strong className="text-4xl font-black tracking-[-0.05em]">{money.format(total)}</strong></div>
-            <button disabled={!items.length || confirmed || connectionState !== 'connected'} onClick={confirmOrder} className="mt-6 flex h-14 w-full items-center justify-between rounded-2xl bg-[#0b1f14] px-5 font-black text-white transition enabled:hover:bg-[#153623] disabled:cursor-not-allowed disabled:bg-[#edf0ea] disabled:text-[#aeb5ad]"><span>{confirmed ? 'Commande transmise' : 'Confirmer la commande'}</span><span>→</span></button>
+            <div className="flex items-end justify-between"><div><span className="text-sm font-bold text-[#717a73]">Total TTC</span>{pricing?.discountTotal ? <small className="mt-1 block text-xs font-bold text-[#bd5d3d]">Remise HubRise : −{money.format(pricing.discountTotal)}</small> : null}</div><strong className="text-4xl font-black tracking-[-0.05em]">{money.format(finalTotal)}</strong></div>
+            <button disabled={!items.length || confirmed || connectionState !== 'connected' || pricing?.acceptingOrders === false} onClick={confirmOrder} className="mt-6 flex h-14 w-full items-center justify-between rounded-2xl bg-[#0b1f14] px-5 font-black text-white transition enabled:hover:bg-[#153623] disabled:cursor-not-allowed disabled:bg-[#edf0ea] disabled:text-[#aeb5ad]"><span>{confirmed ? 'Commande transmise' : pricing?.acceptingOrders === false ? 'Commandes fermées' : 'Confirmer la commande'}</span><span>→</span></button>
             <p className="mt-4 text-center text-[11px] text-[#9aa19a]">Paiement à la prochaine fenêtre · Conversation traitée en temps réel</p>
           </div>
         </aside>
