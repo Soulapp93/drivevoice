@@ -503,6 +503,21 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
 
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
+      if (peer.iceGatheringState !== 'complete') {
+        await new Promise<void>((resolve) => {
+          const handleIceGatheringStateChange = () => {
+            if (peer.iceGatheringState === 'complete') {
+              peer.removeEventListener('icegatheringstatechange', handleIceGatheringStateChange);
+              resolve();
+            }
+          };
+          peer.addEventListener('icegatheringstatechange', handleIceGatheringStateChange);
+          window.setTimeout(() => {
+            peer.removeEventListener('icegatheringstatechange', handleIceGatheringStateChange);
+            resolve();
+          }, 5000);
+        });
+      }
       const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
       const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/realtime-call', {
         method: 'POST',
@@ -514,14 +529,24 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
       });
       if (!response.ok) {
         const errorBody = await response.text().catch(() => '');
-        throw new Error(errorBody || `realtime-${response.status}`);
+        let errorMessage = errorBody || `realtime-${response.status}`;
+        try {
+          const parsed = JSON.parse(errorBody) as { error?: { message?: string } | string; message?: string };
+          errorMessage = typeof parsed.error === 'string'
+            ? parsed.error
+            : parsed.error?.message ?? parsed.message ?? errorMessage;
+        } catch {
+          errorMessage = errorBody || `realtime-${response.status}`;
+        }
+        throw new Error(errorMessage);
       }
       const answerSdp = await response.text();
       await peer.setRemoteDescription({ type: 'answer', sdp: answerSdp });
     } catch (error) {
       cleanupSession();
       setConnectionState('error');
-      setVoiceError("Impossible de joindre l'agent vocal. Vérifiez la connexion puis touchez Recommencer.");
+      const message = error instanceof Error ? error.message : '';
+      setVoiceError(message ? `Connexion vocale impossible : ${message}` : "Impossible de joindre l'agent vocal. Vérifiez la connexion puis touchez Recommencer.");
       setAgentText("Je n'ai pas pu ouvrir la ligne audio.");
     }
   };
