@@ -518,12 +518,12 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           }, 5000);
         });
       }
-      const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
       const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/realtime-call', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/sdp',
-          Authorization: `Bearer ${sessionData.session?.access_token ?? import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          apikey: supabaseAnonKey,
         },
         body: offer.sdp,
       });
