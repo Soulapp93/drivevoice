@@ -322,11 +322,6 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         setSpeaking(false);
         speechStoppedAtRef.current = null;
         responseRecoveryAtRef.current = 0;
-        if (responseInProgressRef.current) {
-          sendEvent({ type: 'response.cancel' });
-          responseInProgressRef.current = false;
-          responseStartedAtRef.current = null;
-        }
         setCustomerText('…');
         if (microphoneReadyRef.current) {
           const id = event.item_id ?? `client-${Date.now()}`;
@@ -433,6 +428,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         break;
       }
       case 'response.done':
+      case 'response.cancelled':
         responseInProgressRef.current = false;
         responseStartedAtRef.current = null;
         setSpeaking(false);
@@ -546,6 +542,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           type: 'session.update',
           session: {
             type: 'realtime',
+            turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 400, silence_duration_ms: 800, create_response: true, interrupt_response: true },
             instructions: `Tu es DriveVoice, équipier du drive ${brand.name}. Parle en français avec des phrases courtes. Utilise uniquement le catalogue ci-dessous. Pour chaque groupe obligatoire, pose la question et attends le choix. Pour un ingrédient retiré ou ajouté, utilise uniquement une option réellement disponible. Ne confirme jamais une commande tant que les choix obligatoires ne sont pas complets.\n\nMESSAGE D'ACCUEIL\n${openingMessage}\n\nCATALOGUE DISPONIBLE\n${productKnowledge}\n\nRÈGLES MÉTIER\n${behaviorRules}\n\nAprès chaque modification, appelle update_order avec le panier complet, en transmettant les choix dans selections. N'invente jamais un produit, un prix, une option ou une disponibilité.`,
             tools: [{
               type: 'function',
@@ -646,7 +643,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           scheduleRecovery("L'agent n'a pas terminé sa réponse audio.");
           return;
         }
-        if (!responseInProgressRef.current && speechStoppedAtRef.current && now - speechStoppedAtRef.current > 2_500 && now - responseRecoveryAtRef.current > 5_000) {
+        if (!responseInProgressRef.current && speechStoppedAtRef.current && now - speechStoppedAtRef.current > 5_000 && now - responseRecoveryAtRef.current > 5_000) {
           responseRecoveryAtRef.current = now;
           speechStoppedAtRef.current = null;
           sendEvent({ type: 'response.create' });

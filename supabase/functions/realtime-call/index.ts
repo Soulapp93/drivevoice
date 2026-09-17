@@ -28,7 +28,7 @@ Deno.serve(async (request) => {
       input: {
         transcription: { model: 'gpt-live-transcribe', languages: ['fr'], delay: 'low' },
         noise_reduction: { type: 'near_field' },
-        turn_detection: { type: 'server_vad', threshold: 0.45, prefix_padding_ms: 300, silence_duration_ms: 550, create_response: true, interrupt_response: true },
+        turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 400, silence_duration_ms: 800, create_response: true, interrupt_response: true },
       },
       output: { voice: 'marin', speed: 1.04 },
     },
