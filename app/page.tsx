@@ -110,6 +110,16 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
   const conversationStartedAtRef = useRef<string | null>(null);
   const handledCallsRef = useRef(new Set<string>());
   const microphoneReadyRef = useRef(false);
+  const responseInProgressRef = useRef(false);
+  const responseStartedAtRef = useRef<number | null>(null);
+  const lastAudioActivityAtRef = useRef(0);
+  const speechStoppedAtRef = useRef<number | null>(null);
+  const responseRecoveryAtRef = useRef(0);
+  const recoveryAttemptsRef = useRef(0);
+  const watchdogTimerRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const startOrderRef = useRef<((preserveState?: boolean) => Promise<void>) | null>(null);
   const nextId = useRef(1);
 
   const total = useMemo(() => items.reduce((sum, item) => sum + item.price, 0), [items]);
@@ -135,9 +145,9 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     return true;
   };
 
-  const cleanupSession = () => {
+  const cleanupSession = (persistAudit = true) => {
     const messages = Array.from(transcriptMessagesRef.current.values());
-    if (conversationIdRef.current && messages.length > 0) {
+    if (persistAudit && conversationIdRef.current && messages.length > 0) {
       void fetch('/api/conversations/audit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -164,8 +174,31 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     mediaStreamRef.current = null;
     audioRef.current = null;
     microphoneReadyRef.current = false;
+    responseInProgressRef.current = false;
+    responseStartedAtRef.current = null;
+    speechStoppedAtRef.current = null;
+    if (watchdogTimerRef.current !== null) window.clearInterval(watchdogTimerRef.current);
+    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+    watchdogTimerRef.current = null;
+    reconnectTimerRef.current = null;
     setListening(false);
     setSpeaking(false);
+  };
+
+  const scheduleRecovery = (reason: string) => {
+    if (reconnectTimerRef.current !== null || !startOrderRef.current) return;
+    if (reconnectAttemptsRef.current >= 3) {
+      setConnectionState('error');
+      setVoiceError('La connexion audio est instable. Touchez Recommencer pour ouvrir une nouvelle conversation.');
+      return;
+    }
+    reconnectAttemptsRef.current += 1;
+    setConnectionState('connecting');
+    setVoiceError(`${reason} Reconnexion automatique…`);
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void startOrderRef.current?.(true);
+    }, 700);
   };
 
   const sendTextToAgent = (text: string) => {
@@ -287,6 +320,13 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
       case 'input_audio_buffer.speech_started':
         setListening(microphoneReadyRef.current);
         setSpeaking(false);
+        speechStoppedAtRef.current = null;
+        responseRecoveryAtRef.current = 0;
+        if (responseInProgressRef.current) {
+          sendEvent({ type: 'response.cancel' });
+          responseInProgressRef.current = false;
+          responseStartedAtRef.current = null;
+        }
         setCustomerText('…');
         if (microphoneReadyRef.current) {
           const id = event.item_id ?? `client-${Date.now()}`;
@@ -296,6 +336,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         break;
       case 'input_audio_buffer.speech_stopped':
         setListening(false);
+        speechStoppedAtRef.current = Date.now();
         break;
       case 'conversation.item.input_audio_transcription.completed':
         if (event.transcript) {
@@ -338,8 +379,16 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
       case 'response.created':
         outputTranscriptRef.current = '';
         activeAgentTranscriptIdRef.current = event.response_id ?? `agent-${Date.now()}`;
+        responseInProgressRef.current = true;
+        responseStartedAtRef.current = Date.now();
+        speechStoppedAtRef.current = null;
         setSpeaking(true);
         setListening(false);
+        break;
+      case 'response.output_audio.delta':
+      case 'response.audio.delta':
+        lastAudioActivityAtRef.current = Date.now();
+        setSpeaking(true);
         break;
       case 'response.output_audio_transcript.delta':
       case 'response.audio_transcript.delta':
@@ -384,34 +433,50 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         break;
       }
       case 'response.done':
+        responseInProgressRef.current = false;
+        responseStartedAtRef.current = null;
         setSpeaking(false);
         setListening(microphoneReadyRef.current);
         break;
       case 'error':
+        responseInProgressRef.current = false;
+        responseStartedAtRef.current = null;
         setSpeaking(false);
         setVoiceError(event.error?.message ?? "L'agent vocal a rencontré une erreur. Réessayez.");
+        if (event.error?.message && /response|audio|turn|connection/i.test(event.error.message)) {
+          scheduleRecovery("Le moteur temps réel a signalé une erreur.");
+        }
         break;
     }
   };
 
-  const startOrder = async () => {
-    cleanupSession();
+  const startOrder = async (preserveState = false) => {
+    const savedCustomerText = preserveState ? customerText : '';
+    const savedAgentText = preserveState ? agentText : '';
+    cleanupSession(!preserveState);
     setStarted(true);
-    setConfirmed(false);
-    setItems([]);
-    setCustomerText('');
+    setConfirmed(preserveState ? confirmed : false);
+    if (!preserveState) setItems([]);
+    setCustomerText(savedCustomerText);
     setVoiceError('');
-    setAgentText("Connexion à l'équipier vocal…");
+    setAgentText(savedAgentText || "Connexion à l'équipier vocal…");
     setConnectionState('connecting');
-    handledCallsRef.current.clear();
-    transcriptMessagesRef.current.clear();
-    activeClientTranscriptIdRef.current = null;
-    activeAgentTranscriptIdRef.current = null;
-    browserSpeechIdRef.current = null;
-    latestBrowserClientIdRef.current = null;
-    conversationIdRef.current = crypto.randomUUID();
-    conversationStartedAtRef.current = new Date().toISOString();
-    setTranscript([]);
+    if (!preserveState) {
+      handledCallsRef.current.clear();
+      transcriptMessagesRef.current.clear();
+      activeClientTranscriptIdRef.current = null;
+      activeAgentTranscriptIdRef.current = null;
+      browserSpeechIdRef.current = null;
+      latestBrowserClientIdRef.current = null;
+      conversationIdRef.current = crypto.randomUUID();
+      conversationStartedAtRef.current = new Date().toISOString();
+      setTranscript([]);
+    }
+    responseInProgressRef.current = false;
+    responseStartedAtRef.current = null;
+    speechStoppedAtRef.current = null;
+    responseRecoveryAtRef.current = 0;
+    if (!preserveState) reconnectAttemptsRef.current = 0;
 
     try {
       const peer = new RTCPeerConnection();
@@ -436,9 +501,23 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
       audio.setAttribute('playsinline', '');
       audioRef.current = audio;
       peer.ontrack = (event) => {
-        audio.srcObject = event.streams[0];
+        audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+        lastAudioActivityAtRef.current = Date.now();
         void audio.play().catch(() => setVoiceError("Touchez l'écran pour autoriser le son de l'agent."));
       };
+      audio.addEventListener('playing', () => {
+        lastAudioActivityAtRef.current = Date.now();
+        setVoiceError('');
+      });
+      audio.addEventListener('waiting', () => {
+        if (responseInProgressRef.current) scheduleRecovery("Le flux audio de l'agent est interrompu.");
+      });
+      audio.addEventListener('stalled', () => {
+        if (responseInProgressRef.current) scheduleRecovery("Le flux audio de l'agent est instable.");
+      });
+      audio.addEventListener('error', () => {
+        if (responseInProgressRef.current) scheduleRecovery("La lecture audio de l'agent a rencontré une erreur.");
+      });
 
       const channel = peer.createDataChannel('oai-events');
       dataChannelRef.current = channel;
@@ -450,9 +529,13 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
         }
       });
       channel.addEventListener('open', () => {
+        reconnectAttemptsRef.current = 0;
         setConnectionState('connected');
         setListening(microphoneReadyRef.current);
-        setAgentText('Bonjour, je vous accueille…');
+        const openingMessage = preserveState
+          ? 'La connexion est rétablie. Reprends la commande là où nous nous sommes arrêtés et demande au client ce qu’il souhaite faire.'
+          : agentWelcome;
+        setAgentText(preserveState ? 'Connexion rétablie…' : 'Bonjour, je vous accueille…');
         const activeProducts = products.filter(product => product.available);
         const productKnowledge = activeProducts.map(product => {
           const groups = product.optionGroups?.map(group => `${group.name} [${group.required ? 'obligatoire' : 'facultatif'}, ${group.min}-${group.max}] : ${group.options.filter(option => option.available).map(option => `${option.name}${option.priceDelta ? ` (+${money.format(option.priceDelta)})` : ''}`).join(', ')}`).join(' | ') ?? '';
@@ -463,7 +546,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           type: 'session.update',
           session: {
             type: 'realtime',
-            instructions: `Tu es DriveVoice, équipier du drive ${brand.name}. Parle en français avec des phrases courtes. Utilise uniquement le catalogue ci-dessous. Pour chaque groupe obligatoire, pose la question et attends le choix. Pour un ingrédient retiré ou ajouté, utilise uniquement une option réellement disponible. Ne confirme jamais une commande tant que les choix obligatoires ne sont pas complets.\n\nMESSAGE D'ACCUEIL\n${agentWelcome}\n\nCATALOGUE DISPONIBLE\n${productKnowledge}\n\nRÈGLES MÉTIER\n${behaviorRules}\n\nAprès chaque modification, appelle update_order avec le panier complet, en transmettant les choix dans selections. N'invente jamais un produit, un prix, une option ou une disponibilité.`,
+            instructions: `Tu es DriveVoice, équipier du drive ${brand.name}. Parle en français avec des phrases courtes. Utilise uniquement le catalogue ci-dessous. Pour chaque groupe obligatoire, pose la question et attends le choix. Pour un ingrédient retiré ou ajouté, utilise uniquement une option réellement disponible. Ne confirme jamais une commande tant que les choix obligatoires ne sont pas complets.\n\nMESSAGE D'ACCUEIL\n${openingMessage}\n\nCATALOGUE DISPONIBLE\n${productKnowledge}\n\nRÈGLES MÉTIER\n${behaviorRules}\n\nAprès chaque modification, appelle update_order avec le panier complet, en transmettant les choix dans selections. N'invente jamais un produit, un prix, une option ou une disponibilité.`,
             tools: [{
               type: 'function',
               name: 'update_order',
@@ -485,19 +568,28 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           type: 'response.create',
           response: {
             output_modalities: ['audio'],
-            instructions: `Prononce ce message d'accueil de façon naturelle puis attends la commande : ${agentWelcome}`,
+            instructions: preserveState
+              ? 'Confirme brièvement que la connexion est rétablie, puis demande au client s’il souhaite continuer ou modifier la commande.'
+              : `Prononce ce message d'accueil de façon naturelle puis attends la commande : ${agentWelcome}`,
           },
         });
       });
       channel.addEventListener('close', () => {
         setListening(false);
         setSpeaking(false);
+        if (startOrderRef.current) scheduleRecovery("La liaison temps réel a été fermée.");
       });
 
       peer.onconnectionstatechange = () => {
-        if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
-          setConnectionState('error');
-          setVoiceError('La conversation audio a été interrompue. Touchez Recommencer pour vous reconnecter.');
+        if (peer.connectionState === 'connected') {
+          setConnectionState('connected');
+        } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
+          scheduleRecovery('La liaison WebRTC a été interrompue.');
+        }
+      };
+      peer.oniceconnectionstatechange = () => {
+        if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
+          scheduleRecovery('La connexion réseau audio a été interrompue.');
         }
       };
 
@@ -542,18 +634,39 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
       }
       const answerSdp = await response.text();
       await peer.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      if (watchdogTimerRef.current !== null) window.clearInterval(watchdogTimerRef.current);
+      watchdogTimerRef.current = window.setInterval(() => {
+        const now = Date.now();
+        const channelOpen = dataChannelRef.current?.readyState === 'open';
+        if (!channelOpen) return;
+        if (responseInProgressRef.current && responseStartedAtRef.current && now - responseStartedAtRef.current > 15_000) {
+          responseInProgressRef.current = false;
+          responseStartedAtRef.current = null;
+          sendEvent({ type: 'response.cancel' });
+          scheduleRecovery("L'agent n'a pas terminé sa réponse audio.");
+          return;
+        }
+        if (!responseInProgressRef.current && speechStoppedAtRef.current && now - speechStoppedAtRef.current > 2_500 && now - responseRecoveryAtRef.current > 5_000) {
+          responseRecoveryAtRef.current = now;
+          speechStoppedAtRef.current = null;
+          sendEvent({ type: 'response.create' });
+        }
+      }, 500);
     } catch (error) {
-      cleanupSession();
+      cleanupSession(!preserveState);
       setConnectionState('error');
       const message = error instanceof Error ? error.message : '';
       setVoiceError(message ? `Connexion vocale impossible : ${message}` : "Impossible de joindre l'agent vocal. Vérifiez la connexion puis touchez Recommencer.");
       setAgentText("Je n'ai pas pu ouvrir la ligne audio.");
     }
   };
+  startOrderRef.current = startOrder;
 
   const interrupt = () => {
     if (connectionState !== 'connected' || !microphoneReadyRef.current) return;
     sendEvent({ type: 'response.cancel' });
+    responseInProgressRef.current = false;
+    responseStartedAtRef.current = null;
     setSpeaking(false);
     setListening(true);
     setAgentText('Je vous écoute.');
