@@ -692,9 +692,18 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
     microphoneReadyRef.current = false;
     setAgentText('Bonjour ! Je suis prêt à prendre votre commande.');
     transcriptMessagesRef.current.clear();
+    handledCallsRef.current.clear();
     activeClientTranscriptIdRef.current = null;
     activeAgentTranscriptIdRef.current = null;
     browserSpeechIdRef.current = null;
+    latestBrowserClientIdRef.current = null;
+    conversationIdRef.current = null;
+    conversationStartedAtRef.current = null;
+    responseInProgressRef.current = false;
+    responseStartedAtRef.current = null;
+    speechStoppedAtRef.current = null;
+    responseRecoveryAtRef.current = 0;
+    reconnectAttemptsRef.current = 0;
     setTranscript([]);
   };
 
@@ -771,7 +780,7 @@ function OrderWorkspace({ products, agentWelcome, agentRules }: { products: Cata
           )}
 
           {!started ? (
-            <button onClick={startOrder} disabled={pricing?.acceptingOrders === false} className="relative z-10 flex w-full items-center justify-between rounded-2xl bg-[#ff5a36] px-6 py-5 text-left transition hover:-translate-y-0.5 hover:bg-[#ff6c4d] disabled:cursor-not-allowed disabled:opacity-50 md:w-[440px]">
+            <button onClick={() => void startOrder()} disabled={pricing?.acceptingOrders === false} className="relative z-10 flex w-full items-center justify-between rounded-2xl bg-[#ff5a36] px-6 py-5 text-left transition hover:-translate-y-0.5 hover:bg-[#ff6c4d] disabled:cursor-not-allowed disabled:opacity-50 md:w-[440px]">
               <span><strong className="block text-lg">{pricing?.acceptingOrders === false ? 'Commandes temporairement fermées' : 'Passer ma commande'}</strong><small className="text-white/70">{pricing?.acceptingOrders === false ? 'Le restaurant est actuellement fermé ou en pause.' : 'Autorisez le micro, l’agent démarre en direct'}</small></span><span className="grid h-12 w-12 place-items-center rounded-full bg-white text-2xl text-[#ff5a36]">●</span>
             </button>
           ) : (
