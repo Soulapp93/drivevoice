@@ -4,7 +4,15 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import { isSupabaseConfigured, supabase, supabaseAnonKey } from '@/lib/supabase/client';
 import { fetchBrandsFromDb, syncBrandsToDb, type MasterBrandInput } from '@/lib/supabase/sync';
 import { createRestaurant, deleteRestaurant, fetchRestaurantProducts, fetchRestaurants, updateRestaurantProduct, type RestaurantInfo, type RestaurantProductInfo } from '@/lib/supabase/restaurants';
-import { calculateCatalogPrice, getCatalogSelectionLabels, validateCatalogSelection, type CatalogSelection } from '@/lib/catalog-rules';
+import { calculateCatalogPrice, validateCatalogSelection } from '@/lib/catalog-rules';
+import { RealtimeResponseController, type ConversationState } from '@/lib/realtime/session-controller';
+import { applyUpdateOrder, buildRealtimeToolDefinitions, createIdempotencyKey, jsonToolOutput, normalizeCatalog, parseUpdateOrderArguments, type BasketSnapshot, type ToolResult } from '@/lib/realtime/tool-protocol';
+import { logRealtimeEvent } from '@/lib/realtime/logging';
+import { OrderWorkspace as VoiceOrderWorkspace } from '@/components/voice/order-workspace';
+
+const RESPONSE_INACTIVITY_TIMEOUT_MS = 15_000;
+const RESPONSE_MAX_DURATION_MS = 45_000;
+const TOOL_MAX_DURATION_MS = 12_000;
 
 type ProductId = string;
 type OrderItem = { id: number; productId: ProductId; name: string; detail: string; price: number; emoji: string; customizations?: string[] };
@@ -20,6 +28,19 @@ type RealtimeEvent = {
   name?: string;
   arguments?: string;
   call_id?: string;
+  status?: string;
+  status_details?: unknown;
+  response?: {
+    id?: string;
+    status?: string;
+    status_details?: unknown;
+    output?: Array<{
+      type?: string;
+      name?: string;
+      arguments?: string;
+      call_id?: string;
+    }>;
+  };
   error?: { message?: string };
   item?: {
     type?: string;
@@ -27,12 +48,24 @@ type RealtimeEvent = {
     name?: string;
     arguments?: string;
     call_id?: string;
-    id?: string;
     role?: string;
     item_id?: string;
     content?: Array<{ type?: string; transcript?: string; text?: string }>;
   };
 };
+
+type ToolCallState = {
+  name: string;
+  arguments: string;
+  status: 'running' | 'completed';
+  result?: ToolResult<unknown>;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isExplicitConfirmation = (value: unknown): value is { confirmation: 'explicit' } =>
+  isRecord(value) && value.confirmation === 'explicit';
 
 type BrowserSpeechRecognition = {
   continuous: boolean;
@@ -80,732 +113,9 @@ const menuOptionMatchesSize = (name: string, selectedSize: string, type: 'accomp
   if (/50cl/.test(text)) return /king|extra|xxl|xl/.test(size);
   return true;
 };
-
 function OrderWorkspace({ products, agentWelcome, agentRules }: { products: CatalogProduct[]; agentWelcome: string; agentRules: Array<[string, boolean]> }) {
-  const [brand, setBrand] = useState(brands[0]);
-  const [started, setStarted] = useState(false);
-  const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
-  const [listening, setListening] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
-  const [pricing, setPricing] = useState<{ acceptingOrders: boolean; discountTotal: number; total: number } | null>(null);
-  const [customerText, setCustomerText] = useState('');
-  const [voiceInput, setVoiceInput] = useState('');
-  const [voiceError, setVoiceError] = useState('');
-  const [agentText, setAgentText] = useState('Bonjour ! Je suis prêt à prendre votre commande.');
-  const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
-  const [items, setItems] = useState<OrderItem[]>([]);
-  const peerRef = useRef<RTCPeerConnection | null>(null);
-  const dataChannelRef = useRef<RTCDataChannel | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const outputTranscriptRef = useRef('');
-  const transcriptMessagesRef = useRef(new Map<string, TranscriptMessage>());
-  const activeClientTranscriptIdRef = useRef<string | null>(null);
-  const activeAgentTranscriptIdRef = useRef<string | null>(null);
-  const speechRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
-  const browserSpeechIdRef = useRef<string | null>(null);
-  const latestBrowserClientIdRef = useRef<string | null>(null);
-  const conversationIdRef = useRef<string | null>(null);
-  const conversationStartedAtRef = useRef<string | null>(null);
-  const handledCallsRef = useRef(new Set<string>());
-  const microphoneReadyRef = useRef(false);
-  const responseInProgressRef = useRef(false);
-  const responseStartedAtRef = useRef<number | null>(null);
-  const lastAudioActivityAtRef = useRef(0);
-  const speechStoppedAtRef = useRef<number | null>(null);
-  const responseRecoveryAtRef = useRef(0);
-  const recoveryAttemptsRef = useRef(0);
-  const watchdogTimerRef = useRef<number | null>(null);
-  const reconnectTimerRef = useRef<number | null>(null);
-  const reconnectAttemptsRef = useRef(0);
-  const startOrderRef = useRef<((preserveState?: boolean) => Promise<void>) | null>(null);
-  const nextId = useRef(1);
-
-  const total = useMemo(() => items.reduce((sum, item) => sum + item.price, 0), [items]);
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      void fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-pricing', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', Authorization: `Bearer ${supabaseAnonKey}` },
-        body: JSON.stringify({ restaurantId: demoRestaurantId, subtotal: total }),
-      }).then(async response => {
-        const result = await response.json().catch(() => ({})) as { acceptingOrders?: boolean; discountTotal?: number; total?: number };
-        if (response.ok) setPricing({ acceptingOrders: result.acceptingOrders !== false, discountTotal: result.discountTotal ?? 0, total: result.total ?? total });
-      }).catch(() => setPricing(null));
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [total]);
-  const finalTotal = pricing?.total ?? total;
-
-  const sendEvent = (event: object) => {
-    const channel = dataChannelRef.current;
-    if (channel?.readyState !== 'open') return false;
-    channel.send(JSON.stringify(event));
-    return true;
-  };
-
-  const cleanupSession = (persistAudit = true) => {
-    const messages = Array.from(transcriptMessagesRef.current.values());
-    if (persistAudit && conversationIdRef.current && messages.length > 0) {
-      void fetch('/api/conversations/audit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId: conversationIdRef.current,
-          restaurantId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-          startedAt: conversationStartedAtRef.current,
-          endedAt: new Date().toISOString(),
-          messages,
-        }),
-      }).catch(() => undefined);
-    }
-    speechRecognitionRef.current?.stop();
-    speechRecognitionRef.current = null;
-    dataChannelRef.current?.close();
-    peerRef.current?.close();
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.srcObject = null;
-    }
-    dataChannelRef.current = null;
-    peerRef.current = null;
-    mediaStreamRef.current = null;
-    audioRef.current = null;
-    microphoneReadyRef.current = false;
-    responseInProgressRef.current = false;
-    responseStartedAtRef.current = null;
-    speechStoppedAtRef.current = null;
-    if (watchdogTimerRef.current !== null) window.clearInterval(watchdogTimerRef.current);
-    if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
-    watchdogTimerRef.current = null;
-    reconnectTimerRef.current = null;
-    setListening(false);
-    setSpeaking(false);
-  };
-
-  const scheduleRecovery = (reason: string) => {
-    if (reconnectTimerRef.current !== null || !startOrderRef.current) return;
-    if (reconnectAttemptsRef.current >= 3) {
-      setConnectionState('error');
-      setVoiceError('La connexion audio est instable. Touchez Recommencer pour ouvrir une nouvelle conversation.');
-      return;
-    }
-    reconnectAttemptsRef.current += 1;
-    setConnectionState('connecting');
-    setVoiceError(`${reason} Reconnexion automatique…`);
-    reconnectTimerRef.current = window.setTimeout(() => {
-      reconnectTimerRef.current = null;
-      void startOrderRef.current?.(true);
-    }, 700);
-  };
-
-  const sendTextToAgent = (text: string) => {
-    const message = text.trim();
-    if (!message) return false;
-    setCustomerText(message);
-    upsertTranscript(`text-client-${Date.now()}`, 'client', message, 'final');
-    outputTranscriptRef.current = '';
-    const sent = sendEvent({
-      type: 'conversation.item.create',
-      item: {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: message }],
-      },
-    });
-    if (sent) sendEvent({ type: 'response.create' });
-    else setVoiceError("L'agent n'est pas encore connecté. Réessayez dans un instant.");
-    return sent;
-  };
-
-  const upsertTranscript = (id: string, speaker: 'client' | 'agent', text: string, status: 'partial' | 'final') => {
-    const normalized = text.trim();
-    if (!normalized) return;
-    const now = Date.now();
-    for (const [existingId, existing] of transcriptMessagesRef.current.entries()) {
-      const isRecent = now - existing.timestamp < 15_000;
-      const isSameSpeaker = existing.speaker === speaker;
-      const isDuplicate = existing.text === normalized
-        || (status === 'final' && existing.status === 'partial' && (normalized.startsWith(existing.text) || existing.text.startsWith(normalized)));
-      if (existingId !== id && isRecent && isSameSpeaker && isDuplicate) {
-        transcriptMessagesRef.current.delete(existingId);
-      }
-    }
-    const existing = transcriptMessagesRef.current.get(id);
-    transcriptMessagesRef.current.set(id, {
-      id,
-      speaker,
-      text: normalized,
-      status,
-      timestamp: existing?.timestamp ?? now,
-    });
-    setTranscript(Array.from(transcriptMessagesRef.current.values()));
-  };
-
-  const appendTranscriptDelta = (id: string, speaker: 'client' | 'agent', delta: string) => {
-    const existing = transcriptMessagesRef.current.get(id);
-    const nextText = `${existing?.text === '…' ? '' : existing?.text ?? ''}${delta}`.trim();
-    if (!nextText) return;
-    upsertTranscript(id, speaker, nextText, 'partial');
-  };
-
-  const finalizeTranscript = (id: string, speaker: 'client' | 'agent', text: string) => {
-    upsertTranscript(id, speaker, text, 'final');
-  };
-
-  const handleOrderTool = (name: string | undefined, rawArguments: string | undefined, callId: string | undefined) => {
-    if (name !== 'update_order' || !callId || handledCallsRef.current.has(callId)) return;
-    handledCallsRef.current.add(callId);
-
-    let output: { ok: boolean; item_count?: number; total?: number; error?: string };
-    try {
-      const parsed = JSON.parse(rawArguments ?? '{}') as {
-        items?: Array<{ product_id?: ProductId; quantity?: number; selections?: Array<{ group?: string; options?: string[] }> }>;
-        status?: 'editing' | 'ready_to_confirm' | 'confirmed';
-      };
-      const nextItems: OrderItem[] = [];
-      for (const requested of parsed.items ?? []) {
-        const product = products.find((entry) => entry.productId === requested.product_id && entry.available);
-        const quantity = Math.min(20, Math.max(0, Math.trunc(Number(requested.quantity) || 0)));
-        if (!product) continue;
-        const selections = requested.selections ?? [];
-        const selectionIds: CatalogSelection = {};
-        const selectedOptions = selections.flatMap(selection => {
-          const group = product.optionGroups?.find(entry => entry.name.toLowerCase() === String(selection.group ?? '').toLowerCase());
-          if (!group) return [];
-          const options = (selection.options ?? []).map(optionName => group.options.find(option => option.name.toLowerCase() === optionName.toLowerCase())).filter((option): option is ProductOption => Boolean(option && option.available));
-          selectionIds[group.id] = options.map(option => option.id);
-          return options;
-        });
-        const ruleGroups = product.optionGroups ?? [];
-        if (!validateCatalogSelection(ruleGroups, selectionIds).valid) {
-          output = { ok: false, error: 'Certains choix obligatoires ou certaines limites de menu ne sont pas respectés.' };
-          continue;
-        }
-        const customizationPrice = calculateCatalogPrice(0, ruleGroups, selectionIds);
-        const customizationLabels = getCatalogSelectionLabels(ruleGroups, selectionIds);
-        for (let index = 0; index < quantity; index += 1) {
-          nextItems.push({ ...product, id: nextId.current++, price: product.price + customizationPrice, customizations: customizationLabels });
-        }
-      }
-      setItems(nextItems);
-      setConfirmed(parsed.status === 'confirmed');
-      const nextTotal = nextItems.reduce((sum, item) => sum + item.price, 0);
-      output = { ok: true, item_count: nextItems.length, total: nextTotal };
-    } catch {
-      output = { ok: false, error: 'Arguments de panier invalides.' };
-    }
-
-    sendEvent({
-      type: 'conversation.item.create',
-      item: { type: 'function_call_output', call_id: callId, output: JSON.stringify(output) },
-    });
-    sendEvent({ type: 'response.create' });
-  };
-
-  const handleRealtimeEvent = (event: RealtimeEvent) => {
-    const appendTranscript = (speaker: 'client' | 'agent', text: string) => {
-      const id = speaker === 'client'
-        ? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`
-        : activeAgentTranscriptIdRef.current ?? `agent-${Date.now()}`;
-      finalizeTranscript(id, speaker, text);
-    };
-    switch (event.type) {
-      case 'session.created':
-      case 'session.updated':
-        setConnectionState('connected');
-        break;
-      case 'input_audio_buffer.speech_started':
-        setListening(microphoneReadyRef.current);
-        setSpeaking(false);
-        speechStoppedAtRef.current = null;
-        responseRecoveryAtRef.current = 0;
-        setCustomerText('…');
-        if (microphoneReadyRef.current) {
-          const id = event.item_id ?? `client-${Date.now()}`;
-          activeClientTranscriptIdRef.current = id;
-          upsertTranscript(id, 'client', '…', 'partial');
-        }
-        break;
-      case 'input_audio_buffer.speech_stopped':
-        setListening(false);
-        speechStoppedAtRef.current = Date.now();
-        break;
-      case 'conversation.item.input_audio_transcription.completed':
-        if (event.transcript) {
-          setCustomerText(event.transcript);
-          const id = latestBrowserClientIdRef.current ?? event.item_id ?? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`;
-          finalizeTranscript(id, 'client', event.transcript);
-          activeClientTranscriptIdRef.current = null;
-          latestBrowserClientIdRef.current = null;
-        }
-        break;
-      case 'conversation.item.input_audio_transcription.failed':
-        setVoiceError(event.error?.message ?? "OpenAI n'a pas fourni la transcription de ce message vocal.");
-        break;
-      case 'conversation.item.created': {
-        const item = event.item;
-        if (item?.role === 'user') {
-          const userText = (item.content ?? [])
-            .map((part) => part.transcript ?? part.text ?? '')
-            .filter(Boolean)
-            .join(' ')
-            .trim();
-          if (userText) {
-            setCustomerText(userText);
-            const id = item.id ?? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`;
-            finalizeTranscript(id, 'client', userText);
-            activeClientTranscriptIdRef.current = null;
-          }
-        }
-        break;
-      }
-      case 'conversation.item.input_audio_transcription.delta':
-      case 'input_audio_transcription.delta':
-        if (event.delta) {
-          const id = latestBrowserClientIdRef.current ?? event.item_id ?? activeClientTranscriptIdRef.current ?? `client-${Date.now()}`;
-          activeClientTranscriptIdRef.current = id;
-          appendTranscriptDelta(id, 'client', event.delta);
-          setCustomerText(transcriptMessagesRef.current.get(id)?.text ?? event.delta);
-        }
-        break;
-      case 'response.created':
-        outputTranscriptRef.current = '';
-        activeAgentTranscriptIdRef.current = event.response_id ?? `agent-${Date.now()}`;
-        responseInProgressRef.current = true;
-        responseStartedAtRef.current = Date.now();
-        speechStoppedAtRef.current = null;
-        setSpeaking(true);
-        setListening(false);
-        break;
-      case 'response.output_audio.delta':
-      case 'response.audio.delta':
-        lastAudioActivityAtRef.current = Date.now();
-        setSpeaking(true);
-        break;
-      case 'response.output_audio_transcript.delta':
-      case 'response.audio_transcript.delta':
-      case 'response.output_text.delta':
-        if (event.delta) {
-          outputTranscriptRef.current += event.delta;
-          setAgentText(outputTranscriptRef.current);
-          const id = event.item_id ?? activeAgentTranscriptIdRef.current ?? `agent-${Date.now()}`;
-          activeAgentTranscriptIdRef.current = id;
-          upsertTranscript(id, 'agent', outputTranscriptRef.current, 'partial');
-        }
-        break;
-      case 'response.output_audio_transcript.done':
-      case 'response.audio_transcript.done':
-        if (event.transcript) {
-          setAgentText(event.transcript);
-          appendTranscript('agent', event.transcript);
-          activeAgentTranscriptIdRef.current = null;
-        }
-        break;
-      case 'response.output_text.done':
-        if (event.text) {
-          setAgentText(event.text);
-          appendTranscript('agent', event.text);
-        }
-        break;
-      case 'response.function_call_arguments.done':
-        handleOrderTool(event.name, event.arguments, event.call_id);
-        break;
-      case 'response.output_item.done': {
-        const item = event.item;
-        if (item?.type === 'function_call') {
-          handleOrderTool(item.name, item.arguments, item.call_id);
-        } else if (item?.type === 'message') {
-          const transcript = (item.content ?? [])
-            .map((part) => part.transcript ?? part.text ?? '')
-            .filter(Boolean)
-            .join(' ');
-          if (transcript) setAgentText(transcript);
-          if (transcript) appendTranscript('agent', transcript);
-        }
-        break;
-      }
-      case 'response.done':
-      case 'response.cancelled':
-        responseInProgressRef.current = false;
-        responseStartedAtRef.current = null;
-        setSpeaking(false);
-        setListening(microphoneReadyRef.current);
-        break;
-      case 'error':
-        responseInProgressRef.current = false;
-        responseStartedAtRef.current = null;
-        setSpeaking(false);
-        setVoiceError(event.error?.message ?? "L'agent vocal a rencontré une erreur. Réessayez.");
-        if (event.error?.message && /response|audio|turn|connection/i.test(event.error.message)) {
-          scheduleRecovery("Le moteur temps réel a signalé une erreur.");
-        }
-        break;
-    }
-  };
-
-  const startOrder = async (preserveState = false) => {
-    const savedCustomerText = preserveState ? customerText : '';
-    const savedAgentText = preserveState ? agentText : '';
-    cleanupSession(!preserveState);
-    setStarted(true);
-    setConfirmed(preserveState ? confirmed : false);
-    if (!preserveState) setItems([]);
-    setCustomerText(savedCustomerText);
-    setVoiceError('');
-    setAgentText(savedAgentText || "Connexion à l'équipier vocal…");
-    setConnectionState('connecting');
-    if (!preserveState) {
-      handledCallsRef.current.clear();
-      transcriptMessagesRef.current.clear();
-      activeClientTranscriptIdRef.current = null;
-      activeAgentTranscriptIdRef.current = null;
-      browserSpeechIdRef.current = null;
-      latestBrowserClientIdRef.current = null;
-      conversationIdRef.current = crypto.randomUUID();
-      conversationStartedAtRef.current = new Date().toISOString();
-      setTranscript([]);
-    }
-    responseInProgressRef.current = false;
-    responseStartedAtRef.current = null;
-    speechStoppedAtRef.current = null;
-    responseRecoveryAtRef.current = 0;
-    if (!preserveState) reconnectAttemptsRef.current = 0;
-
-    try {
-      const peer = new RTCPeerConnection();
-      peerRef.current = peer;
-
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('micro-unavailable');
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        mediaStreamRef.current = stream;
-        microphoneReadyRef.current = true;
-        stream.getTracks().forEach((track) => peer.addTrack(track, stream));
-      } catch {
-        microphoneReadyRef.current = false;
-        peer.addTransceiver('audio', { direction: 'recvonly' });
-        setVoiceError("Le micro n'est pas accessible dans ce navigateur. L'agent reste disponible par écrit et répond à l'oral.");
-      }
-
-      const audio = document.createElement('audio');
-      audio.autoplay = true;
-      audio.setAttribute('playsinline', '');
-      audioRef.current = audio;
-      peer.ontrack = (event) => {
-        audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
-        lastAudioActivityAtRef.current = Date.now();
-        void audio.play().catch(() => setVoiceError("Touchez l'écran pour autoriser le son de l'agent."));
-      };
-      audio.addEventListener('playing', () => {
-        lastAudioActivityAtRef.current = Date.now();
-        setVoiceError('');
-      });
-      audio.addEventListener('waiting', () => {
-        if (responseInProgressRef.current) scheduleRecovery("Le flux audio de l'agent est interrompu.");
-      });
-      audio.addEventListener('stalled', () => {
-        if (responseInProgressRef.current) scheduleRecovery("Le flux audio de l'agent est instable.");
-      });
-      audio.addEventListener('error', () => {
-        if (responseInProgressRef.current) scheduleRecovery("La lecture audio de l'agent a rencontré une erreur.");
-      });
-
-      const channel = peer.createDataChannel('oai-events');
-      dataChannelRef.current = channel;
-      channel.addEventListener('message', (message) => {
-        try {
-          handleRealtimeEvent(JSON.parse(message.data) as RealtimeEvent);
-        } catch {
-          setVoiceError("Un message de l'agent n'a pas pu être lu.");
-        }
-      });
-      channel.addEventListener('open', () => {
-        reconnectAttemptsRef.current = 0;
-        setConnectionState('connected');
-        setListening(microphoneReadyRef.current);
-        const openingMessage = preserveState
-          ? 'La connexion est rétablie. Reprends la commande là où nous nous sommes arrêtés et demande au client ce qu’il souhaite faire.'
-          : agentWelcome;
-        setAgentText(preserveState ? 'Connexion rétablie…' : 'Bonjour, je vous accueille…');
-        const activeProducts = products.filter(product => product.available);
-        const productKnowledge = activeProducts.map(product => {
-          const groups = product.optionGroups?.map(group => `${group.name} [${group.required ? 'obligatoire' : 'facultatif'}, ${group.min}-${group.max}] : ${group.options.filter(option => option.available).map(option => `${option.name}${option.priceDelta ? ` (+${money.format(option.priceDelta)})` : ''}`).join(', ')}`).join(' | ') ?? '';
-          return `- ${product.productId}: ${product.name} — ${product.detail} — ${money.format(product.price)}${groups ? ` — CHOIX: ${groups}` : ''}`;
-        }).join('\n');
-        const behaviorRules = agentRules.filter(([, enabled]) => enabled).map(([rule]) => `- ${rule}`).join('\n');
-        sendEvent({
-          type: 'session.update',
-          session: {
-            type: 'realtime',
-            turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 400, silence_duration_ms: 800, create_response: true, interrupt_response: true },
-            instructions: `Tu es DriveVoice, équipier du drive ${brand.name}. Parle en français avec des phrases courtes. Utilise uniquement le catalogue ci-dessous. Pour chaque groupe obligatoire, pose la question et attends le choix. Pour un ingrédient retiré ou ajouté, utilise uniquement une option réellement disponible. Ne confirme jamais une commande tant que les choix obligatoires ne sont pas complets.\n\nMESSAGE D'ACCUEIL\n${openingMessage}\n\nCATALOGUE DISPONIBLE\n${productKnowledge}\n\nRÈGLES MÉTIER\n${behaviorRules}\n\nAprès chaque modification, appelle update_order avec le panier complet, en transmettant les choix dans selections. N'invente jamais un produit, un prix, une option ou une disponibilité.`,
-            tools: [{
-              type: 'function',
-              name: 'update_order',
-              description: "Synchronise l'intégralité du panier visible après chaque modification.",
-              parameters: {
-                type: 'object',
-                properties: {
-                  items: { type: 'array', items: { type: 'object', properties: { product_id: { type: 'string', enum: activeProducts.map(product => product.productId) }, quantity: { type: 'integer', minimum: 1, maximum: 20 }, selections: { type: 'array', items: { type: 'object', properties: { group: { type: 'string' }, options: { type: 'array', items: { type: 'string' } } }, required: ['group', 'options'], additionalProperties: false } } }, required: ['product_id', 'quantity'], additionalProperties: false } },
-                  status: { type: 'string', enum: ['editing', 'ready_to_confirm', 'confirmed'] },
-                },
-                required: ['items', 'status'],
-                additionalProperties: false,
-              },
-            }],
-            tool_choice: 'auto',
-          },
-        });
-        sendEvent({
-          type: 'response.create',
-          response: {
-            output_modalities: ['audio'],
-            instructions: preserveState
-              ? 'Confirme brièvement que la connexion est rétablie, puis demande au client s’il souhaite continuer ou modifier la commande.'
-              : `Prononce ce message d'accueil de façon naturelle puis attends la commande : ${agentWelcome}`,
-          },
-        });
-      });
-      channel.addEventListener('close', () => {
-        setListening(false);
-        setSpeaking(false);
-        if (startOrderRef.current) scheduleRecovery("La liaison temps réel a été fermée.");
-      });
-
-      peer.onconnectionstatechange = () => {
-        if (peer.connectionState === 'connected') {
-          setConnectionState('connected');
-        } else if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') {
-          scheduleRecovery('La liaison WebRTC a été interrompue.');
-        }
-      };
-      peer.oniceconnectionstatechange = () => {
-        if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
-          scheduleRecovery('La connexion réseau audio a été interrompue.');
-        }
-      };
-
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
-      if (peer.iceGatheringState !== 'complete') {
-        await new Promise<void>((resolve) => {
-          const handleIceGatheringStateChange = () => {
-            if (peer.iceGatheringState === 'complete') {
-              peer.removeEventListener('icegatheringstatechange', handleIceGatheringStateChange);
-              resolve();
-            }
-          };
-          peer.addEventListener('icegatheringstatechange', handleIceGatheringStateChange);
-          window.setTimeout(() => {
-            peer.removeEventListener('icegatheringstatechange', handleIceGatheringStateChange);
-            resolve();
-          }, 5000);
-        });
-      }
-      const response = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/realtime-call', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/sdp',
-          Authorization: `Bearer ${supabaseAnonKey}`,
-          apikey: supabaseAnonKey,
-        },
-        body: offer.sdp,
-      });
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => '');
-        let errorMessage = errorBody || `realtime-${response.status}`;
-        try {
-          const parsed = JSON.parse(errorBody) as { error?: { message?: string } | string; message?: string };
-          errorMessage = typeof parsed.error === 'string'
-            ? parsed.error
-            : parsed.error?.message ?? parsed.message ?? errorMessage;
-        } catch {
-          errorMessage = errorBody || `realtime-${response.status}`;
-        }
-        throw new Error(errorMessage);
-      }
-      const answerSdp = await response.text();
-      await peer.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-      if (watchdogTimerRef.current !== null) window.clearInterval(watchdogTimerRef.current);
-      watchdogTimerRef.current = window.setInterval(() => {
-        const now = Date.now();
-        const channelOpen = dataChannelRef.current?.readyState === 'open';
-        if (!channelOpen) return;
-        if (responseInProgressRef.current && responseStartedAtRef.current && now - responseStartedAtRef.current > 15_000) {
-          responseInProgressRef.current = false;
-          responseStartedAtRef.current = null;
-          sendEvent({ type: 'response.cancel' });
-          scheduleRecovery("L'agent n'a pas terminé sa réponse audio.");
-          return;
-        }
-        if (!responseInProgressRef.current && speechStoppedAtRef.current && now - speechStoppedAtRef.current > 5_000 && now - responseRecoveryAtRef.current > 5_000) {
-          responseRecoveryAtRef.current = now;
-          speechStoppedAtRef.current = null;
-          sendEvent({ type: 'response.create' });
-        }
-      }, 500);
-    } catch (error) {
-      cleanupSession(!preserveState);
-      setConnectionState('error');
-      const message = error instanceof Error ? error.message : '';
-      setVoiceError(message ? `Connexion vocale impossible : ${message}` : "Impossible de joindre l'agent vocal. Vérifiez la connexion puis touchez Recommencer.");
-      setAgentText("Je n'ai pas pu ouvrir la ligne audio.");
-    }
-  };
-  startOrderRef.current = startOrder;
-
-  const interrupt = () => {
-    if (connectionState !== 'connected' || !microphoneReadyRef.current) return;
-    sendEvent({ type: 'response.cancel' });
-    responseInProgressRef.current = false;
-    responseStartedAtRef.current = null;
-    setSpeaking(false);
-    setListening(true);
-    setAgentText('Je vous écoute.');
-  };
-
-  const submitText = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (sendTextToAgent(voiceInput)) setVoiceInput('');
-  };
-
-  const confirmOrder = () => {
-    setConfirmed(true);
-    sendTextToAgent("Je confirme définitivement la commande affichée. Donne-moi mon numéro de commande et invite-moi à avancer.");
-  };
-
-  const restart = () => {
-    cleanupSession();
-    setStarted(false);
-    setConnectionState('idle');
-    setItems([]);
-    setConfirmed(false);
-    setVoiceError('');
-    microphoneReadyRef.current = false;
-    setAgentText('Bonjour ! Je suis prêt à prendre votre commande.');
-    transcriptMessagesRef.current.clear();
-    handledCallsRef.current.clear();
-    activeClientTranscriptIdRef.current = null;
-    activeAgentTranscriptIdRef.current = null;
-    browserSpeechIdRef.current = null;
-    latestBrowserClientIdRef.current = null;
-    conversationIdRef.current = null;
-    conversationStartedAtRef.current = null;
-    responseInProgressRef.current = false;
-    responseStartedAtRef.current = null;
-    speechStoppedAtRef.current = null;
-    responseRecoveryAtRef.current = 0;
-    reconnectAttemptsRef.current = 0;
-    setTranscript([]);
-  };
-
-  useEffect(() => () => cleanupSession(), []);
-
-  const statusLabel = connectionState === 'connecting'
-    ? 'Connexion en cours'
-    : connectionState === 'error'
-      ? 'Agent hors ligne'
-      : connectionState === 'connected'
-        ? 'Agent temps réel'
-        : 'Borne disponible';
-
   return (
-    <main className="min-h-screen bg-[#f4f5ef] text-[#142018]">
-      <header className="mx-auto flex max-w-[1540px] items-center justify-between px-5 py-5 md:px-10">
-        <div className="flex items-center gap-3">
-          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#0b1f14] text-lg font-black text-white">D</span>
-          <div>
-            <p className="text-lg font-black tracking-[-0.04em]">DRIVE<span className="text-[#ff5a36]">VOICE</span></p>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#6b766e]">Assistant de commande</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 rounded-full border border-[#dce1d8] bg-white px-4 py-2 text-xs font-bold">
-          <span className={`h-2 w-2 rounded-full ${connectionState === 'error' ? 'bg-[#e74d3c]' : connectionState === 'connecting' ? 'animate-pulse bg-[#ffc647]' : 'animate-pulse bg-[#39b76a]'}`} /> {statusLabel}
-        </div>
-      </header>
-
-      <section className="mx-auto grid max-w-[1540px] gap-5 px-5 pb-8 md:px-10 xl:grid-cols-[1.2fr_1fr]">
-        <div className="relative flex min-h-[720px] flex-col overflow-hidden rounded-[32px] bg-[#0b1f14] p-7 text-white md:p-11">
-          <div className="pointer-events-none absolute -right-24 -top-28 h-80 w-80 rounded-full bg-[#ff5a36]" />
-          <div className="pointer-events-none absolute right-28 top-20 h-24 w-24 rounded-full bg-[#ffc647]" />
-
-          <div className="relative z-10 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <span className="rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold">FR · LIVE</span>
-              <span className="text-xs text-white/55">Drive n°04 · Voie A</span>
-            </div>
-          </div>
-
-          {!started ? (
-            <div className="relative z-10 my-auto max-w-3xl py-16">
-              <h1 className="max-w-2xl text-[clamp(2.7rem,6vw,6rem)] font-black leading-[.9] tracking-[-0.07em]">Prêt à passer votre commande<span className="text-[#ff5a36]"> ?</span></h1>
-              <p className="mt-7 max-w-xl text-base font-semibold leading-relaxed text-white/70 md:text-lg">Veuillez cliquer sur le bouton « Passer ma commande » pour commencer votre commande.</p>
-            </div>
-          ) : (
-            <div className="relative z-10 my-auto py-8">
-              <div className="mb-8 flex items-center gap-5">
-                <button onClick={interrupt} disabled={connectionState !== 'connected' || !microphoneReadyRef.current} aria-label="Interrompre l’agent et parler" className={`voice-orb grid h-24 w-24 shrink-0 place-items-center rounded-full border-[10px] text-3xl shadow-2xl transition md:h-32 md:w-32 ${listening ? 'border-[#ffc647]/25 bg-[#ffc647] text-[#142018]' : speaking ? 'border-[#ff5a36]/25 bg-[#ff5a36]' : 'border-white/10 bg-white/10'} disabled:cursor-not-allowed disabled:opacity-50`}>
-                  {connectionState === 'connecting' ? '···' : listening ? '●' : speaking ? '◖' : '◎'}
-                </button>
-                <div>
-                  <p className="text-xs font-bold uppercase tracking-[.22em] text-[#ffc647]">{connectionState === 'connecting' ? 'Ouverture de la ligne' : listening ? 'Je vous écoute en direct' : speaking ? 'DriveVoice vous parle' : connectionState === 'connected' && !microphoneReadyRef.current ? 'Mode texte actif' : 'À vous de parler'}</p>
-                  <div className="mt-3 flex h-8 items-center gap-1" aria-hidden="true">
-                    {[14, 26, 38, 22, 44, 31, 18, 36, 24, 15].map((height, index) => <span key={index} className={`wave-bar w-1.5 rounded-full transition-colors ${listening ? 'bg-[#ffc647]' : speaking ? 'bg-[#ff5a36]' : 'bg-white/20'}`} style={{ height }} />)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="max-w-3xl rounded-[28px] bg-white/8 p-6 backdrop-blur md:p-8">
-                <div className="flex items-center gap-4"><span className={`grid h-12 w-12 shrink-0 place-items-center rounded-full text-xs font-black text-[#142018] ${listening ? 'bg-[#ffc647]' : speaking ? 'bg-[#ff5a36] text-white' : 'bg-white/20 text-white'}`}>{listening ? 'VOUS' : speaking ? 'DV' : '•••'}</span><div><p className="text-xl font-bold leading-snug md:text-3xl">{listening ? 'Le client parle' : speaking ? 'DriveVoice vous répond' : 'Conversation vocale active'}</p><p className="mt-2 text-sm text-white/50">Les transcriptions sont conservées en arrière-plan pour les audits.</p></div></div>
-              </div>
-              <section className="mt-5 max-w-3xl rounded-[24px] border border-white/10 bg-black/15 p-5 backdrop-blur" aria-label="Transcription de la conversation">
-                <div className="flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">État de la conversation</p><h2 className="mt-1 text-lg font-black">Prise de parole en direct</h2></div><span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black text-white/60">Transcription masquée</span></div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className={`rounded-2xl border p-4 ${listening ? 'border-[#ffc647]/70 bg-[#ffc647]/15' : 'border-white/10 bg-white/5'}`}><div className="flex items-center justify-between"><p className="text-[10px] font-black uppercase tracking-widest text-[#ffc647]">Client</p><span className={`h-2.5 w-2.5 rounded-full ${listening ? 'animate-pulse bg-[#ffc647]' : 'bg-white/25'}`} /></div><p className="mt-3 text-sm font-black">{listening ? 'Le client parle' : 'En attente du client'}</p><p className="mt-1 text-[10px] text-white/45">{listening ? 'Parole détectée en direct' : 'Le prochain tour de parole sera affiché ici'}</p></div>
-                  <div className={`rounded-2xl border p-4 ${speaking ? 'border-[#ff5a36]/70 bg-[#ff5a36]/15' : 'border-white/10 bg-white/5'}`}><div className="flex items-center justify-between"><p className="text-[10px] font-black uppercase tracking-widest text-[#ff927a]">DriveVoice IA</p><span className={`h-2.5 w-2.5 rounded-full ${speaking ? 'animate-pulse bg-[#ff5a36]' : 'bg-white/25'}`} /></div><p className="mt-3 text-sm font-black">{speaking ? 'L’agent parle' : 'En attente de l’agent'}</p><p className="mt-1 text-[10px] text-white/45">{speaking ? 'Réponse vocale en direct' : 'La réponse apparaîtra après le client'}</p></div>
-                </div>
-              </section>
-
-              {voiceError && <p role="alert" className="mt-4 max-w-3xl rounded-2xl border border-[#ffc647]/30 bg-[#ffc647]/10 px-4 py-3 text-sm text-[#ffe099]">{voiceError}</p>}
-
-            </div>
-          )}
-
-          {!started ? (
-            <button onClick={() => void startOrder()} disabled={pricing?.acceptingOrders === false} className="relative z-10 flex w-full items-center justify-between rounded-2xl bg-[#ff5a36] px-6 py-5 text-left transition hover:-translate-y-0.5 hover:bg-[#ff6c4d] disabled:cursor-not-allowed disabled:opacity-50 md:w-[440px]">
-              <span><strong className="block text-lg">{pricing?.acceptingOrders === false ? 'Commandes temporairement fermées' : 'Passer ma commande'}</strong><small className="text-white/70">{pricing?.acceptingOrders === false ? 'Le restaurant est actuellement fermé ou en pause.' : 'Autorisez le micro, l’agent démarre en direct'}</small></span><span className="grid h-12 w-12 place-items-center rounded-full bg-white text-2xl text-[#ff5a36]">●</span>
-            </button>
-          ) : (
-            <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-5"><p className="text-xs text-white/45">Vous pouvez parler par-dessus l’agent ou toucher le cercle pour l’interrompre.</p><button onClick={restart} className="text-xs font-bold text-white/60 underline decoration-white/20 underline-offset-4">Recommencer</button></div>
-          )}
-        </div>
-
-        <aside className="flex min-h-[720px] flex-col rounded-[32px] bg-white p-8 shadow-sm md:p-10 xl:sticky xl:top-24 xl:h-fit">
-          <div className="flex items-center justify-between border-b border-[#e7eae4] pb-7"><div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#899189]">Commande · {brand.mark}</p><h2 className="mt-1 text-2xl font-black tracking-[-0.04em]">Votre panier</h2></div><span className="rounded-full bg-[#f1f3ee] px-3 py-1.5 text-xs font-bold">{items.length} article{items.length !== 1 ? 's' : ''}</span></div>
-
-          {confirmed ? (
-            <div className="grid flex-1 place-items-center text-center"><div><div className="mx-auto mb-5 grid h-24 w-24 place-items-center rounded-full bg-[#dff6e5] text-4xl">✓</div><p className="text-xs font-bold uppercase tracking-[.18em] text-[#38a55f]">Commande confirmée</p><p className="mt-2 text-7xl font-black tracking-[-.08em]">47</p><p className="mt-4 max-w-xs text-sm leading-relaxed text-[#758077]">Avancez jusqu’à la prochaine fenêtre. Votre commande a été transmise en cuisine.</p></div></div>
-          ) : items.length ? (
-            <div className="flex-1 space-y-3 overflow-auto py-6">
-              {items.map((item, index) => <div key={item.id} className="group flex items-center gap-4 rounded-2xl border border-[#edf0ea] p-4 transition hover:border-[#d9ded5]"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-[#f3f5f0] text-2xl">{item.emoji}</span><div className="min-w-0 flex-1"><p className="truncate font-black">{index + 1}. {item.name}</p><p className="truncate text-xs text-[#8a938b]">{item.detail}</p>{item.customizations?.length ? <p className="mt-1 text-[10px] font-bold text-[#bd5d3d]">{item.customizations.join(' · ')}</p> : null}</div><div className="text-right"><p className="font-black">{money.format(item.price)}</p><button onClick={() => sendTextToAgent(`Retire un ${item.name} de ma commande.`)} className="mt-1 text-[11px] font-bold text-[#ff5a36] opacity-70 hover:opacity-100">Retirer</button></div></div>)}
-            </div>
-          ) : (
-            <div className="grid flex-1 place-items-center text-center"><div className="max-w-[250px]"><div className="mx-auto mb-5 grid h-20 w-20 place-items-center rounded-full bg-[#f3f5f0] text-3xl">🎙️</div><h3 className="text-xl font-black">Prêt à vous écouter</h3><p className="mt-2 text-sm leading-relaxed text-[#7b847d]">Le panier se met à jour pendant votre conversation avec l’agent.</p></div></div>
-          )}
-
-          <div className="border-t border-[#e7eae4] pt-6">
-            <div className="flex items-end justify-between"><div><span className="text-sm font-bold text-[#717a73]">Total TTC</span>{pricing?.discountTotal ? <small className="mt-1 block text-xs font-bold text-[#bd5d3d]">Remise HubRise : −{money.format(pricing.discountTotal)}</small> : null}</div><strong className="text-4xl font-black tracking-[-0.05em]">{money.format(finalTotal)}</strong></div>
-            <button disabled={!items.length || confirmed || connectionState !== 'connected' || pricing?.acceptingOrders === false} onClick={confirmOrder} className="mt-6 flex h-14 w-full items-center justify-between rounded-2xl bg-[#0b1f14] px-5 font-black text-white transition enabled:hover:bg-[#153623] disabled:cursor-not-allowed disabled:bg-[#edf0ea] disabled:text-[#aeb5ad]"><span>{confirmed ? 'Commande transmise' : pricing?.acceptingOrders === false ? 'Commandes fermées' : 'Confirmer la commande'}</span><span>→</span></button>
-            <p className="mt-4 text-center text-[11px] text-[#9aa19a]">Paiement à la prochaine fenêtre · Conversation traitée en temps réel</p>
-          </div>
-        </aside>
-      </section>
-    </main>
+    <VoiceOrderWorkspace products={products} agentWelcome={agentWelcome} agentRules={agentRules} />
   );
 }
 
@@ -1640,12 +950,15 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
   }, [restaurantId]);
 
   useEffect(() => {
-    void loadStatus();
+    const initialStatusTimer = window.setTimeout(() => void loadStatus(), 0);
     const params = new URLSearchParams(window.location.search);
+    let transitionTimer: number | null = null;
     if (params.get('hubrise') === 'connected') {
-      setHubriseState('connected');
+      transitionTimer = window.setTimeout(() => {
+        setHubriseState('connected');
+        void loadStatus();
+      }, 0);
       window.history.replaceState({}, '', window.location.pathname + window.location.search.replace(/[?&]hubrise=connected[^&]*/, '').replace(/^\?&/, '?'));
-      void loadStatus();
       window.setTimeout(() => {
         void fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=sync_catalog', {
           method: 'POST',
@@ -1661,9 +974,15 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
         });
       }, 0);
     } else if (params.get('hubrise') === 'error') {
-      setHubriseState('error');
-      setHubriseMessage(decodeURIComponent(params.get('reason') || 'Erreur OAuth HubRise'));
+      transitionTimer = window.setTimeout(() => {
+        setHubriseState('error');
+        setHubriseMessage(decodeURIComponent(params.get('reason') || 'Erreur OAuth HubRise'));
+      }, 0);
     }
+    return () => {
+      window.clearTimeout(initialStatusTimer);
+      if (transitionTimer !== null) window.clearTimeout(transitionTimer);
+    };
   }, [loadStatus]);
 
   const runTest = () => { setTestState('testing'); window.setTimeout(() => setTestState('success'), 900); };
@@ -1776,14 +1095,93 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
 }
 
 function AccountPanel() {
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteDraft, setInviteDraft] = useState({ fullName: '', email: '', role: 'Manager' });
+  const [inviteNotice, setInviteNotice] = useState('');
+  const [inviteSubmitting, setInviteSubmitting] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetNotice, setResetNotice] = useState('');
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [members, setMembers] = useState([
+    { name: 'Alex Martin', access: 'Espace directeur', status: 'Administrateur' },
+    { name: 'Sophie Bernard', access: 'Espace manager', status: 'Actif' },
+    { name: 'Équipe restaurant', access: 'Espace franchisé', status: '12 membres' },
+  ]);
+
+  const openInvite = () => {
+    setInviteDraft({ fullName: '', email: '', role: 'Manager' });
+    setInviteNotice('');
+    setInviteOpen(true);
+  };
+
+  const inviteMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase) {
+      setInviteNotice('La connexion Supabase n’est pas disponible.');
+      return;
+    }
+    setInviteSubmitting(true);
+    setInviteNotice('');
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData.session) {
+      setInviteNotice('Connectez-vous à votre compte pour envoyer une invitation.');
+      setInviteSubmitting(false);
+      return;
+    }
+    try {
+      const response = await fetch('/api/account/invite', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${sessionData.session.access_token}`,
+        },
+        body: JSON.stringify({ ...inviteDraft, restaurantId: demoRestaurantId }),
+      });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) {
+        setInviteNotice(result.error ?? 'Invitation impossible.');
+        return;
+      }
+      setMembers(current => [...current, { name: inviteDraft.fullName, access: `Espace ${inviteDraft.role.toLowerCase()}`, status: 'Invitation envoyée' }]);
+      setInviteOpen(false);
+      setInviteDraft({ fullName: '', email: '', role: 'Manager' });
+    } catch {
+      setInviteNotice('Impossible de contacter le service d’invitation.');
+    } finally {
+      setInviteSubmitting(false);
+    }
+  };
+
+  const openPasswordReset = async () => {
+    setResetNotice('');
+    setResetOpen(true);
+    if (!supabase) return;
+    const { data } = await supabase.auth.getUser();
+    if (data.user?.email) setResetEmail(data.user.email);
+  };
+
+  const requestPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase || !resetEmail.trim()) {
+      setResetNotice('Saisissez l’adresse e-mail du compte à réinitialiser.');
+      return;
+    }
+    setResetSubmitting(true);
+    setResetNotice('');
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail.trim(), {
+      redirectTo: `${window.location.origin}/login?mode=reset`,
+    });
+    setResetNotice(error ? error.message : 'Un lien de réinitialisation vient d’être envoyé. Consultez votre messagerie.');
+    setResetSubmitting(false);
+  };
+
   return (
     <div>
-      <SectionHeading eyebrow="Espace restaurant" title="Mon compte" description="Gérez votre abonnement, vos factures et les droits d’accès de votre équipe." action={<button className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">Gérer l’abonnement</button>} />
-      <div className="grid gap-5 xl:grid-cols-[1.1fr_.9fr]">
-        <section className={`${panelCard} p-6 md:p-7`}><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Abonnement actuel</p><h2 className="mt-2 text-2xl font-black">DriveVoice Pro</h2><p className="mt-2 text-sm text-[#748078]">Facturation mensuelle · prochain renouvellement le 02 octobre 2026</p></div><span className="rounded-full bg-[#e1f6e7] px-3 py-1.5 text-[10px] font-black uppercase text-[#278a49]">Actif</span></div><div className="mt-7 grid gap-3 sm:grid-cols-3">{[['Commandes incluses','1 000 / mois'],['Agents IA','1 actif'],['Établissements','1 connecté']].map(([label,value])=><div key={label} className="rounded-2xl bg-[#f7f8f5] p-4"><p className="text-[10px] font-bold text-[#8a948c]">{label}</p><p className="mt-2 text-sm font-black">{value}</p></div>)}</div></section>
-        <section className={`${panelCard} p-6 md:p-7`}><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Facturation</p><h2 className="mt-2 text-xl font-black">Dernière facture</h2><div className="mt-5 flex items-center justify-between rounded-2xl border border-[#e5e9e3] p-4"><div><p className="text-sm font-black">Facture septembre 2026</p><p className="mt-1 text-xs text-[#859087]">02 septembre 2026</p></div><div className="text-right"><p className="font-black">149,00 €</p><button className="mt-1 text-[10px] font-black text-[#ff5a36]">Télécharger PDF</button></div></div><button className="mt-5 w-full rounded-xl border border-[#dfe4dc] py-3 text-xs font-black">Voir toutes les factures</button></section>
-      </div>
-      <section className={`${panelCard} mt-5 p-6 md:p-7`}><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Droits d’accès</p><h2 className="mt-2 text-xl font-black">Équipe du restaurant</h2><p className="mt-1 text-sm text-[#7b857d]">Contrôlez ce que chaque profil peut consulter ou modifier.</p></div><button className="rounded-xl bg-[#0b1f14] px-4 py-3 text-xs font-black text-white">＋ Inviter un membre</button></div><div className="mt-6 overflow-hidden rounded-2xl border border-[#e7ebe5]"><div className="grid grid-cols-[1.3fr_1fr_1fr] bg-[#f7f8f5] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-[#8b948c]"><span>Profil</span><span>Accès</span><span>Statut</span></div>{[['Alex Martin','Espace directeur','Administrateur'],['Sophie Bernard','Espace manager','Actif'],['Équipe restaurant','Espace franchisé','12 membres']].map(([name,role,status])=><div key={name} className="grid grid-cols-[1.3fr_1fr_1fr] items-center border-t border-[#edf0eb] px-4 py-4 text-xs"><span className="font-black">{name}</span><span className="font-semibold text-[#68746b]">{role}</span><span className="font-black text-[#2b9652]">● {status}</span></div>)}</div></section>
+      <SectionHeading eyebrow="Espace restaurant" title="Mon compte" description="Gérez les droits d’accès et les membres de l’équipe de votre restaurant." />
+      <section className={`${panelCard} mt-5 p-6 md:p-7`}><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Droits d’accès</p><h2 className="mt-2 text-xl font-black">Équipe du restaurant</h2><p className="mt-1 text-sm text-[#7b857d]">Contrôlez ce que chaque profil peut consulter ou modifier.</p></div><button onClick={openInvite} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 py-3 text-xs font-black text-white transition hover:bg-[#173b27]">＋ Inviter un membre</button></div><div className="mt-6 overflow-x-auto rounded-2xl border border-[#e7ebe5]"><div className="min-w-[620px]"><div className="grid grid-cols-[1.3fr_1fr_1fr] bg-[#f7f8f5] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-[#8b948c]"><span>Profil</span><span>Accès</span><span>Statut</span></div>{members.map(member=><div key={`${member.name}-${member.access}`} className="grid grid-cols-[1.3fr_1fr_1fr] items-center border-t border-[#edf0eb] px-4 py-4 text-xs"><span className="font-black">{member.name}</span><span className="font-semibold text-[#68746b]">{member.access}</span><span className={`font-black ${member.status === 'Invitation envoyée' ? 'text-[#d98b14]' : 'text-[#2b9652]'}`}>● {member.status}</span></div>)}</div></div><div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#edf0eb] pt-5"><div><p className="text-sm font-black">Sécurité du compte</p><p className="mt-1 text-xs text-[#7b857d]">Recevez un lien sécurisé pour choisir un nouveau mot de passe.</p></div><button onClick={openPasswordReset} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-3 text-xs font-black transition hover:border-[#ff8f72] hover:text-[#d95032]">Réinitialiser le mot de passe</button></div></section>
+      {inviteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Inviter un membre"><div className="w-full max-w-lg rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">Nouvel accès</p><h2 className="mt-2 text-2xl font-black">Inviter un membre</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Un e-mail sécurisé sera envoyé pour créer son accès DriveVoice.</p></div><button onClick={() => setInviteOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={inviteMember} className="mt-7 space-y-4"><label className="block text-xs font-black text-[#68736a]">Nom complet<input required value={inviteDraft.fullName} onChange={event => setInviteDraft(current => ({ ...current, fullName: event.target.value }))} className={`${fieldClass} mt-2`} placeholder="Ex. Sophie Bernard" /></label><label className="block text-xs font-black text-[#68736a]">E-mail professionnel<input required type="email" value={inviteDraft.email} onChange={event => setInviteDraft(current => ({ ...current, email: event.target.value }))} className={`${fieldClass} mt-2`} placeholder="sophie@restaurant.fr" /></label><label className="block text-xs font-black text-[#68736a]">Rôle<select value={inviteDraft.role} onChange={event => setInviteDraft(current => ({ ...current, role: event.target.value }))} className={`${fieldClass} mt-2`}><option>Manager</option><option>Opérateur</option><option>Lecteur</option></select></label>{inviteNotice && <p role="status" className="rounded-xl bg-[#fff4e8] px-4 py-3 text-xs font-bold text-[#a35c16]">{inviteNotice}</p>}<div className="flex justify-end gap-3 pt-3"><button type="button" onClick={() => setInviteOpen(false)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Annuler</button><button disabled={inviteSubmitting} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50">{inviteSubmitting ? 'Envoi…' : 'Envoyer l’invitation'}</button></div></form></div></div>}
+      {resetOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Réinitialiser le mot de passe"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">Sécurité du compte</p><h2 className="mt-2 text-2xl font-black">Réinitialiser le mot de passe</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Nous vous enverrons un lien sécurisé valable pour votre compte.</p></div><button onClick={() => setResetOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={requestPasswordReset} className="mt-7"><label className="block text-xs font-black text-[#68736a]">E-mail du compte<input required type="email" value={resetEmail} onChange={event => setResetEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="vous@restaurant.fr" /></label>{resetNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{resetNotice}</p>}<div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setResetOpen(false)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Fermer</button><button disabled={resetSubmitting} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50">{resetSubmitting ? 'Envoi…' : 'Envoyer le lien'}</button></div></form></div></div>}
     </div>
   );
 }
@@ -1883,8 +1281,8 @@ function EnterpriseCatalogPanel({ products, setProducts }: { products: CatalogPr
 
 type MenuCategory = { id: number; name: string; icon: string; enabled: boolean };
 type ProductDraft = {
-  name: string; detail: string; category: string; subcategory: string; price: number; posCode: string; emoji: string; ingredients: any; available: boolean;
-  productType: 'simple' | 'configurable' | 'menu' | 'bundle';
+  name: string; detail: string; category: string; subcategory: string; price: number; posCode: string; emoji: string; ingredients: ProductIngredient[]; available: boolean;
+  productType: 'simple' | 'configurable' | 'menu' | 'bundle' | 'deal';
   variants: ProductVariant[];
   optionGroups: ProductOptionGroup[];
   modifiers: ProductModifier[];
@@ -2010,7 +1408,7 @@ function RestaurantMenuBuilderPanel({ products, setProducts }: { products: Catal
   const visibleSubcategories = subcategoryTemplates[activeCategory] ?? [];
   const filteredProducts = products.filter(product => (activeCategory === 'Toutes' || product.category === activeCategory) && (activeSubcategory === 'Tous' || !visibleSubcategories.length || product.subcategory === activeSubcategory) && `${product.name} ${product.detail} ${product.posCode}`.toLowerCase().includes(query.toLowerCase()));
   const activeCount = products.filter(product => product.available).length;
-  useEffect(()=>setActiveSubcategory('Tous'),[activeCategory]);
+  useEffect(()=>{ window.setTimeout(() => setActiveSubcategory('Tous'), 0); },[activeCategory]);
 
   const renderProductCard = (product: CatalogProduct) => <article key={product.id} className="group overflow-hidden rounded-[20px] border border-[#e4e8e1] bg-white transition hover:-translate-y-0.5 hover:border-[#ff9e87] hover:shadow-lg"><button onClick={()=>openProductEditor(product)} className="w-full text-left"><div className="relative grid h-32 place-items-center bg-gradient-to-br from-[#f8f9f6] to-[#edf1eb]">{product.imageUrl?<img src={product.imageUrl} alt={product.name} className="h-full w-full object-contain p-2" />:<span className="text-6xl">{product.emoji}</span>}<span className={`absolute right-3 top-3 rounded-full px-2 py-1 text-[9px] font-black ${product.available?'bg-[#dff5e5] text-[#27894a]':'bg-[#e4e7e3] text-[#737c74]'}`}>{product.available?'Disponible':'Masqué'}</span></div><div className="p-4"><p className="text-[9px] font-black uppercase tracking-wider text-[#999f99]">{product.category}{product.subcategory?` · ${product.subcategory}`:''}</p><h3 className="mt-1 truncate text-base font-black">{product.name}</h3><p className="mt-1 line-clamp-2 min-h-8 text-[11px] leading-relaxed text-[#7b847d]">{product.detail||'Description à compléter'}</p><div className="mt-4 flex items-end justify-between"><div><p className="text-lg font-black">{money.format(product.price)}</p><p className="font-mono text-[9px] text-[#9ca39d]">{product.posCode||'Code POS manquant'}</p></div><span className="text-[10px] font-black text-[#ff5a36]">Modifier →</span></div></div></button></article>;
 
@@ -2192,22 +1590,24 @@ function BackOfficePanel() {
 
   // Chargement initial depuis Supabase (si configuré et non vide)
   useEffect(()=>{
-    if(!isSupabaseConfigured){setDbStatus('off');return;}
     let cancelled=false;
-    setDbStatus('loading');
-    fetchBrandsFromDb().then(loaded=>{
-      if(cancelled)return;
-      if(loaded&&loaded.length>0){
-        skipPersistRef.current=true;
-        setBrands(loaded as unknown as MasterBrand[]);
-        hydratedRef.current=true;
-        setDbStatus('synced');
-      }else{
-        hydratedRef.current=false;
-        setDbStatus('memory');
-      }
-    });
-    return()=>{cancelled=true;};
+    const hydrationTimer = window.setTimeout(() => {
+      if(!isSupabaseConfigured){setDbStatus('off');return;}
+      setDbStatus('loading');
+      fetchBrandsFromDb().then(loaded=>{
+        if(cancelled)return;
+        if(loaded&&loaded.length>0){
+          skipPersistRef.current=true;
+          setBrands(loaded as unknown as MasterBrand[]);
+          hydratedRef.current=true;
+          setDbStatus('synced');
+        }else{
+          hydratedRef.current=false;
+          setDbStatus('memory');
+        }
+      });
+    }, 0);
+    return()=>{cancelled=true;window.clearTimeout(hydrationTimer);};
   },[]);
 
   // Persistance vers Supabase à chaque modification (debounce)
@@ -2254,10 +1654,10 @@ function BackOfficePanel() {
   const archive=()=>{if(!brand)return;updateBrand(brand.id,{status:'Archivé',updated:'À l\'instant'});setNotice('Catalogue archivé. Les restaurants conservent leur dernière version publiée.');};
   const startCreate=()=>{const defaultCategory=category==='Toutes'?(categories[0]??'Menus'):category;setDraft({name:'',detail:'',category:defaultCategory,subcategory:subcategoryTemplates[defaultCategory]?.[1]??'',price:0,posCode:'',emoji:'🍽️',ingredients:[],available:true,productType:defaultCategory==='Menus'?'menu':'simple',variants:[],optionGroups:[],modifiers:[],imageUrl:'',slug:'',meatFilter:'',badges:'',ingredientImages:'',allergens:'',traces:'',displayOrder:brand?.products.length?brand.products.length+1:1,nutrition:{calories:'',fat:'',saturatedFat:'',proteins:'',carbohydrates:'',sugars:'',salt:''}});setCreatingProduct(true);setEditingProduct(null);setNewIngredient('');};
   const startEdit=(product:CatalogProduct)=>{const isMenuCategory=product.category==='Menus'||product.category==='Menus enfants';const requiredSteps=product.category==='Menus enfants'?['Taille du menu','Plat','Accompagnement','Boisson','Sauces','Dessert','Jouet']:['Taille du menu','Plat','Accompagnement','Boisson','Sauces'];const existingSteps=product.optionGroups??[];const normalizedSteps=isMenuCategory?requiredSteps.map((name,index)=>existingSteps.find(step=>step.name.toLowerCase()===name.toLowerCase())??{id:product.id*100+index,name,question:`Choisissez : ${name.toLowerCase()}`,required:true,min:1,max:1,options:[]}).concat(existingSteps.filter(step=>!requiredSteps.some(name=>name.toLowerCase()===step.name.toLowerCase()))):existingSteps;setDraft({name:product.name,detail:product.detail,category:product.category,subcategory:product.subcategory??subcategoryTemplates[product.category]?.[1]??'',price:product.price,posCode:product.posCode,emoji:product.emoji,ingredients:product.ingredientSettings??(product.ingredients??[]).map((name,index)=>({id:product.id*1000+index,name,removable:!/pain/i.test(name),extraAllowed:!/pain|sauce/i.test(name),extraPrice:0})),available:product.available,productType:isMenuCategory?'menu':product.productType??'simple',variants:product.variants??[],optionGroups:normalizedSteps,modifiers:product.modifiers??[],imageUrl:product.imageUrl??'',slug:product.slug??'',meatFilter:product.meatFilter??'',badges:(product.badges??[]).join(', '),ingredientImages:(product.ingredientImages??[]).join('\n'),allergens:(product.allergens??[]).join(', '),traces:(product.traces??[]).join(', '),displayOrder:product.displayOrder??1,nutrition:product.nutrition??{calories:'',fat:'',saturatedFat:'',proteins:'',carbohydrates:'',sugars:'',salt:''}});setEditingProduct(product);setCreatingProduct(false);setNewIngredient('');};
-  const addIngredient=()=>{const name=newIngredient.trim();if(!name)return;setDraft(current=>({...current,ingredients:[...current.ingredients,{id:Date.now(),name,removable:true,extraAllowed:true,extraPrice:0}]}));setNewIngredient('');};
+  const addIngredient=()=>{const name=newIngredient.trim();if(!name)return;const ingredientId=Math.max(0,...draft.ingredients.map(ingredient=>ingredient.id))+1;setDraft(current=>({...current,ingredients:[...current.ingredients,{id:ingredientId,name,removable:true,extraAllowed:true,extraPrice:0}]}));setNewIngredient('');};
   const updateIngredient=(id:number,patch:Partial<ProductIngredient>)=>setDraft(current=>({...current,ingredients:current.ingredients.map((ingredient:ProductIngredient)=>ingredient.id===id?{...ingredient,...patch}:ingredient)}));
   const moveIngredient=(index:number,direction:-1|1)=>setDraft(current=>{const target=index+direction;if(target<0||target>=current.ingredients.length)return current;const ingredients=[...current.ingredients];[ingredients[index],ingredients[target]]=[ingredients[target],ingredients[index]];return {...current,ingredients};});
-  const saveProduct=()=>{if(!brand||!draft.name.trim()||draft.price<0)return;const ingredientSettings=draft.category!=='Menus'&&draft.category!=='Menus enfants'?(draft.ingredients as ProductIngredient[]).filter(ingredient=>ingredient.name.trim()).map(ingredient=>({...ingredient,name:ingredient.name.trim()})):[];const ingredients=ingredientSettings.map(ingredient=>ingredient.name);const ingredientModifiers:ProductModifier[]=ingredientSettings.flatMap(ingredient=>[...(ingredient.removable?[{id:ingredient.id*10+1,name:`Sans ${ingredient.name}`,kind:'remove' as const,priceDelta:0}]:[]),...(ingredient.extraAllowed?[{id:ingredient.id*10+2,name:`Supplément ${ingredient.name}`,kind:'add' as const,priceDelta:ingredient.extraPrice}]:[])]);const nextProduct={name:draft.name.trim(),detail:draft.detail.trim(),category:draft.category,subcategory:draft.subcategory||undefined,price:draft.price,posCode:draft.posCode.trim(),emoji:draft.emoji||'🍽️',imageUrl:draft.imageUrl.trim()||undefined,ingredients,ingredientSettings,available:draft.available,productType:draft.productType,variants:draft.variants,optionGroups:draft.optionGroups,modifiers:ingredientModifiers,slug:draft.slug.trim()||undefined,meatFilter:draft.meatFilter.trim()||undefined,badges:splitField(draft.badges),ingredientImages:splitField(draft.ingredientImages),allergens:splitField(draft.allergens),traces:splitField(draft.traces),displayOrder:draft.displayOrder,nutrition:draft.nutrition};const products=editingProduct?brand.products.map(product=>product.id===editingProduct.id?{...product,...nextProduct}:product):[...brand.products,{id:Date.now(),productId:`master_${brand.id}_${Date.now()}`,...nextProduct} as CatalogProduct];updateBrand(brand.id,{products,status:'Brouillon',updated:'Modifié à l\'instant'});setEditingProduct(null);setCreatingProduct(false);};
+  const saveProduct=()=>{if(!brand||!draft.name.trim()||draft.price<0)return;const ingredientSettings=draft.category!=='Menus'&&draft.category!=='Menus enfants'?(draft.ingredients as ProductIngredient[]).filter(ingredient=>ingredient.name.trim()).map(ingredient=>({...ingredient,name:ingredient.name.trim()})):[];const ingredients=ingredientSettings.map(ingredient=>ingredient.name);const ingredientModifiers:ProductModifier[]=ingredientSettings.flatMap(ingredient=>[...(ingredient.removable?[{id:ingredient.id*10+1,name:`Sans ${ingredient.name}`,kind:'remove' as const,priceDelta:0}]:[]),...(ingredient.extraAllowed?[{id:ingredient.id*10+2,name:`Supplément ${ingredient.name}`,kind:'add' as const,priceDelta:ingredient.extraPrice}]:[])]);const nextProduct={name:draft.name.trim(),detail:draft.detail.trim(),category:draft.category,subcategory:draft.subcategory||undefined,price:draft.price,posCode:draft.posCode.trim(),emoji:draft.emoji||'🍽️',imageUrl:draft.imageUrl.trim()||undefined,ingredients,ingredientSettings,available:draft.available,productType:draft.productType,variants:draft.variants,optionGroups:draft.optionGroups,modifiers:ingredientModifiers,slug:draft.slug.trim()||undefined,meatFilter:draft.meatFilter.trim()||undefined,badges:splitField(draft.badges),ingredientImages:splitField(draft.ingredientImages),allergens:splitField(draft.allergens),traces:splitField(draft.traces),displayOrder:draft.displayOrder,nutrition:draft.nutrition};const nextProductId=Math.max(0,...brand.products.map(product=>product.id))+1;const products=editingProduct?brand.products.map(product=>product.id===editingProduct.id?{...product,...nextProduct}:product):[...brand.products,{id:nextProductId,productId:`master_${brand.id}_${nextProductId}`,...nextProduct} as CatalogProduct];updateBrand(brand.id,{products,status:'Brouillon',updated:'Modifié à l\'instant'});setEditingProduct(null);setCreatingProduct(false);};
   const addCategory=()=>{if(!brand)return;const name=window.prompt('Nom de la nouvelle catégorie');if(!name?.trim())return;setCategory(name.trim());startCreate();setDraft(current=>({...current,category:name.trim()}));};
   // ----- Restaurants (multi-tenant Supabase) -----
   const [restaurants,setRestaurants]=useState<RestaurantInfo[]|null>(null);
@@ -2397,10 +1797,10 @@ function MasterMenuDetail({ product, onClose, onEdit }: { product: CatalogProduc
   const visibleSides = useMemo(() => (sideGroup?.options ?? []).filter(option => sizeMatches(option.availableFor, selectedSize)), [sideGroup, selectedSize]);
   const visibleDrinks = useMemo(() => (drinkGroup?.options ?? []).filter(option => sizeMatches(option.availableFor, selectedSize)), [drinkGroup, selectedSize]);
   useEffect(() => {
-    if (!visibleSides.some(option => option.name === selectedSide)) setSelectedSide(visibleSides[0]?.name ?? '');
+    if (!visibleSides.some(option => option.name === selectedSide)) window.setTimeout(() => setSelectedSide(visibleSides[0]?.name ?? ''), 0);
   }, [selectedSide, selectedSize, visibleSides]);
   useEffect(() => {
-    if (!visibleDrinks.some(option => option.name === selectedDrink)) setSelectedDrink(visibleDrinks[0]?.name ?? '');
+    if (!visibleDrinks.some(option => option.name === selectedDrink)) window.setTimeout(() => setSelectedDrink(visibleDrinks[0]?.name ?? ''), 0);
   }, [selectedDrink, visibleDrinks]);
   const selectedOption = (group: ProductOptionGroup | undefined, value: string) => group?.options.find(option => option.name === value);
   const selectedOptionPrice = (group: ProductOptionGroup | undefined, value: string) => {
@@ -2592,11 +1992,11 @@ export default function Home() {
   };
   return (
     <div className={`min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid ${sidebarCollapsed ? 'lg:grid-cols-[88px_1fr]' : 'lg:grid-cols-[268px_1fr]'}`}>
-      <aside className="drivevoice-sidebar relative border-b border-[#223a2c] bg-[#0b1f14] pb-4 text-white shadow-[12px_0_40px_rgba(7,26,17,.08)] lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:overflow-x-hidden lg:overflow-y-auto lg:overscroll-contain lg:border-b-0 lg:border-r lg:pb-28">
+      <aside className="drivevoice-sidebar relative flex flex-col border-b border-[#223a2c] bg-[#0b1f14] pb-4 text-white shadow-[12px_0_40px_rgba(7,26,17,.08)] lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:min-h-0 lg:overflow-hidden lg:border-b-0 lg:border-r lg:pb-0">
         <div className={`flex items-center justify-between px-5 py-5 lg:px-5 lg:py-7 ${sidebarCollapsed ? 'lg:flex-col lg:gap-5' : 'lg:block'}`}><div className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black shadow-[0_8px_24px_rgba(255,90,54,.22)]">D</span><div className={sidebarCollapsed ? 'lg:hidden' : ''}><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></div><div className="flex items-center gap-2"><span className={`rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a] ${sidebarCollapsed ? 'lg:hidden' : ''}`}>● Live</span><button onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} className="hidden h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-sm font-black transition hover:bg-white/10 lg:grid" aria-label={sidebarCollapsed ? 'Développer la barre latérale' : 'Réduire la barre latérale'}>{sidebarCollapsed ? '→' : '←'}</button></div></div>
         <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? 'BK' : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>BK Paris République</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>Drive n°04 · Voie A</p></div></div>
-        <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:block lg:space-y-1 lg:overflow-visible ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
-        <button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className={`absolute bottom-6 hidden rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36] lg:block ${sidebarCollapsed ? 'left-3 right-3' : 'left-4 right-4'}`}><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button>
+        <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:min-h-0 lg:flex-1 lg:block lg:space-y-1 lg:overflow-y-auto lg:overscroll-contain ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
+        <div className={`hidden border-t border-white/10 pt-4 lg:mx-4 lg:mb-5 lg:block lg:shrink-0 ${sidebarCollapsed ? 'lg:mx-3' : ''}`}><button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className="w-full rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36]"><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button></div>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
         {activeTab === 'order' ? <OrderWorkspace products={enterpriseCatalog} agentWelcome={agentWelcome} agentRules={agentRules} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <DashboardPanel />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <CatalogPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}

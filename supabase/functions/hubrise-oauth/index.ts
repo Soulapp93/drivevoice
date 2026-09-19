@@ -188,6 +188,27 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true, restaurantId: parsed.restaurantId });
     }
 
+    if (action === 'products') {
+      if (!body.restaurantId) throw new Error('restaurantId required');
+      const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
+      const { data, error } = await supabase
+        .from('restaurant_products')
+        .select('product_id, name, category, price, available, data')
+        .eq('restaurant_id', body.restaurantId)
+        .eq('available', true)
+        .order('display_order');
+      if (error) throw new Error(error.message);
+      const products = (data ?? []).map((row) => ({
+        productId: row.product_id,
+        name: row.name,
+        category: row.category,
+        price: row.price,
+        available: row.available,
+        data: row.data,
+      }));
+      return jsonResponse({ products });
+    }
+
     if (action === 'status') {
       if (!body.restaurantId) throw new Error('restaurantId required');
       const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);

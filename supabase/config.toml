@@ -2,3 +2,6 @@ project_id = "projet-drive-ia-fast-food"
 
 [functions.hubrise-oauth]
 verify_jwt = true
+
+[functions.realtime-call]
+verify_jwt = true

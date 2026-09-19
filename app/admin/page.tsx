@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { supabase } from '@/lib/supabase/client';
 
 type AdminTab = 'overview' | 'restaurants' | 'hubrise' | 'quality' | 'admins';
@@ -33,7 +34,10 @@ export default function AdminPage() {
     setRestaurants((data ?? []) as Restaurant[]);
     setLoading(false);
   };
-  useEffect(() => { void loadRestaurants(); }, []);
+  useEffect(() => {
+    const loadTimer = window.setTimeout(() => void loadRestaurants(), 0);
+    return () => window.clearTimeout(loadTimer);
+  }, []);
   useEffect(() => {
     if (tab !== 'admins' || !supabase) return;
     void supabase.from('platform_admins').select('id,full_name,role,active,created_at').order('created_at', { ascending: false }).then(({ data, error }) => {
@@ -74,7 +78,7 @@ export default function AdminPage() {
   return (
     <main className="min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid lg:grid-cols-[270px_1fr]">
       <aside className="relative overflow-hidden border-b border-white/10 bg-[#071a11]/95 p-5 text-white shadow-[10px_0_45px_rgba(7,26,17,.08)] backdrop-blur-2xl lg:sticky lg:top-0 lg:min-h-screen lg:border-b-0 lg:border-r lg:border-white/10 lg:p-7"><div className="pointer-events-none absolute -right-20 -top-20 h-56 w-56 rounded-full bg-[#ffc647]/10 blur-3xl" /><div className="relative flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black shadow-[0_8px_25px_rgba(255,90,54,.25)]">D</span><div><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] uppercase tracking-[.18em] text-white/40">Platform admin</p></div></div><div className="relative mt-10 rounded-2xl border border-white/10 bg-white/[.06] p-4 shadow-inner backdrop-blur-xl"><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">Espace actif</p><p className="mt-2 text-sm font-black">Administration plateforme</p><p className="mt-1 text-[10px] text-white/45">Données Supabase en direct</p></div><div className="relative mt-8"><p className="px-3 text-[9px] font-black uppercase tracking-[.2em] text-white/35">Administration</p><nav className="mt-4 space-y-1">{tabs.map(([id, label, icon]) => <button key={id} onClick={() => setTab(id)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-xs font-black transition ${tab === id ? 'bg-white text-[#102019] shadow-[0_8px_25px_rgba(0,0,0,.12)]' : 'text-white/55 hover:bg-white/[.08] hover:text-white'}`}><span className={`grid h-8 w-8 place-items-center rounded-lg text-base ${tab === id ? 'bg-[#ff5a36] text-white' : 'bg-white/[.06]'}`}>{icon}</span>{label}</button>)}</nav></div><div className="relative mt-10 rounded-2xl border border-white/10 bg-white/[.04] p-4"><div className="flex items-center gap-3"><span className="grid h-9 w-9 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div><p className="text-xs font-black">Administrateur DriveVoice</p><p className="text-[9px] text-white/40">Accès plateforme</p></div></div><button onClick={signOut} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-white/10 px-3 py-2.5 text-[10px] font-black text-white/60 transition hover:border-[#ff7556] hover:bg-[#ff5a36] hover:text-white">↪ Se déconnecter</button></div></aside>
-      <section className="min-w-0"><header className="sticky top-0 z-20 flex items-center justify-between border-b border-[#dfe5de]/80 bg-[#f4f6f1]/80 px-5 py-5 backdrop-blur-xl md:px-9"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#89938b]">DriveVoice / Back-office</p><h1 className="mt-1 text-lg font-black">{tabs.find(([id]) => id === tab)?.[1]}</h1></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce7dc] bg-white/80 px-3 py-2 text-[10px] font-black text-[#27894a] shadow-sm md:block">● Supabase connecté</span><a href="/" className="rounded-xl border border-[#dfe5de] bg-white/80 px-4 py-2 text-xs font-black shadow-sm transition hover:border-[#ff7556]">Espace restaurant</a></div></header><div className="mx-auto max-w-[1500px] p-5 md:p-9">
+      <section className="min-w-0"><header className="sticky top-0 z-20 flex items-center justify-between border-b border-[#dfe5de]/80 bg-[#f4f6f1]/80 px-5 py-5 backdrop-blur-xl md:px-9"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#89938b]">DriveVoice / Back-office</p><h1 className="mt-1 text-lg font-black">{tabs.find(([id]) => id === tab)?.[1]}</h1></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce7dc] bg-white/80 px-3 py-2 text-[10px] font-black text-[#27894a] shadow-sm md:block">● Supabase connecté</span><Link href="/" className="rounded-xl border border-[#dfe5de] bg-white/80 px-4 py-2 text-xs font-black shadow-sm transition hover:border-[#ff7556]">Espace restaurant</Link></div></header><div className="mx-auto max-w-[1500px] p-5 md:p-9">
         {tab === 'overview' && <Overview restaurants={restaurants} activeCount={activeCount} />}
         {tab === 'restaurants' && <RestaurantList restaurants={restaurants} loading={loading} selected={selected} setSelected={setSelected} onCreate={() => setCreateOpen(true)} />}
         {tab === 'hubrise' && <HubrisePanel />}

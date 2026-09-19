@@ -111,14 +111,71 @@ create table if not exists public.restaurant_hubrise_connections (
 
 create index if not exists idx_hubrise_connections_restaurant on public.restaurant_hubrise_connections (restaurant_id);
 
+-- ============================================================
+-- 5) ÉTAT DE CONVERSATION ET IDEMPOTENCE REALTIME
+--    Les écritures passent par les routes serveur avec la service role.
+-- ============================================================
+create table if not exists public.conversation_baskets (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null unique,
+  restaurant_id   uuid not null references public.restaurants(id) on delete cascade,
+  snapshot        jsonb not null default '{}'::jsonb,
+  status          text not null default 'editing',
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create index if not exists idx_conversation_baskets_restaurant
+  on public.conversation_baskets (restaurant_id);
+
+create table if not exists public.conversation_tool_calls (
+  id              uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null,
+  restaurant_id   uuid not null references public.restaurants(id) on delete cascade,
+  call_id         text not null,
+  tool_name       text not null,
+  result          jsonb not null,
+  created_at      timestamptz not null default now(),
+  unique (conversation_id, call_id)
+);
+
+create index if not exists idx_conversation_tool_calls_restaurant
+  on public.conversation_tool_calls (restaurant_id);
+
+create table if not exists public.orders (
+  id                uuid primary key default gen_random_uuid(),
+  restaurant_id     uuid not null references public.restaurants(id) on delete restrict,
+  conversation_id   uuid,
+  idempotency_key   text not null unique,
+  hubrise_order_id  text,
+  ref               text not null,
+  source            text not null default 'voice',
+  status            text not null default 'pending',
+  total             numeric not null default 0,
+  items             jsonb not null default '[]'::jsonb,
+  created_at        timestamptz not null default now()
+);
+
+alter table public.orders add column if not exists conversation_id uuid;
+alter table public.orders add column if not exists idempotency_key text;
+alter table public.orders add column if not exists items jsonb not null default '[]'::jsonb;
+alter table public.orders add column if not exists total numeric not null default 0;
+alter table public.orders add column if not exists source text not null default 'voice';
+alter table public.orders add column if not exists status text not null default 'pending';
+create unique index if not exists idx_orders_idempotency_key
+  on public.orders (idempotency_key)
+  where idempotency_key is not null;
+
+alter table public.conversation_baskets enable row level security;
+alter table public.conversation_tool_calls enable row level security;
+alter table public.orders enable row level security;
+
 alter table public.restaurant_hubrise_connections enable row level security;
 
 drop policy if exists "restaurant_hubrise_connections_open" on public.restaurant_hubrise_connections;
-create policy "restaurant_hubrise_connections_open" on public.restaurant_hubrise_connections
-  for all to anon, authenticated using (true) with check (true);
 
 -- ============================================================
--- 5) updated_at automatique
+-- 6) updated_at automatique
 -- ============================================================
 create or replace function public.set_updated_at()
 returns trigger language plpgsql as $$
@@ -147,8 +204,12 @@ drop trigger if exists trg_restaurant_hubrise_connections_updated on public.rest
 create trigger trg_restaurant_hubrise_connections_updated before update on public.restaurant_hubrise_connections
   for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_conversation_baskets_updated on public.conversation_baskets;
+create trigger trg_conversation_baskets_updated before update on public.conversation_baskets
+  for each row execute function public.set_updated_at();
+
 -- ============================================================
--- 6) SÉCURITÉ (Row Level Security)
+-- 7) SÉCURITÉ (Row Level Security)
 --    ⚠️ Phase actuelle : pas encore d'authentification.
 --    Les politiques ci-dessous autorisent la lecture ET l'écriture
 --    (nécessaire au back-office). À verrouiller dès la mise en
@@ -160,7 +221,10 @@ alter table public.restaurants          enable row level security;
 alter table public.restaurant_products  enable row level security;
 alter table public.restaurant_hubrise_connections enable row level security;
 
--- Politique permissive temporaire (lecture + écriture) pour anon & authenticated
+-- Les tables de catalogue restent en mode compatibilité avec le back-office
+-- existant tant que son parcours d'authentification n'est pas migré.
+-- Les tables de panier, d'idempotence et les jetons HubRise n'ont aucune
+-- politique client : elles ne sont accessibles que par les routes serveur.
 do $$
 declare t text;
 begin

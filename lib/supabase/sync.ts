@@ -14,7 +14,18 @@ export interface MasterBrandInput {
   status: string;
   restaurants: number;
   updated: string;
-  products: any[];            // CatalogProduct[]
+  products: SyncProduct[];
+}
+
+interface SyncProduct {
+  productId?: string;
+  id?: string | number;
+  name: string;
+  category: string;
+  price: number;
+  available?: boolean;
+  displayOrder?: number;
+  [key: string]: unknown;
 }
 
 interface BrandRow {
@@ -93,9 +104,9 @@ export async function syncBrandsToDb(brands: MasterBrandInput[]): Promise<SyncRe
       }
     }
     return { ok: true };
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[syncBrandsToDb]', err);
-    return { ok: false, error: err?.message ?? 'Erreur de synchronisation' };
+    return { ok: false, error: err instanceof Error ? err.message : 'Erreur de synchronisation' };
   }
 }
 
@@ -126,8 +137,14 @@ export async function fetchBrandsFromDb(): Promise<MasterBrandInput[] | null> {
       if (productError) throw productError;
 
       const products = (productRows ?? [])
-        .map((p: any) => p.data)
-        .filter(Boolean);
+        .map((p: { data: unknown }) => p.data)
+        .filter((product): product is SyncProduct => (
+          typeof product === 'object'
+          && product !== null
+          && 'name' in product
+          && 'category' in product
+          && 'price' in product
+        ));
 
       result.push({
         id: row.brand_key,

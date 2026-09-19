@@ -63,8 +63,8 @@ export async function GET(request: Request) {
     return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent('Configuration OAuth serveur incomplète'));
   }
 
-  const parsed = verifyState(state, stateSecret);
-  if (!parsed) {
+  const parsedState = verifyState(state!, stateSecret!);
+  if (!parsedState) {
     return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent('State invalide ou expiré, relancez la connexion'));
   }
 
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
         client_id: clientId,
         client_secret: clientSecret,
         redirect_uri: redirectUri,
-        code,
+      code,
       }),
     });
 
@@ -95,7 +95,7 @@ export async function GET(request: Request) {
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
     const { error } = await supabase.from('restaurant_hubrise_connections').upsert({
-      restaurant_id: parsed.restaurantId,
+      restaurant_id: parsedState!.restaurantId,
       account_id: tokens.account_id ?? null,
       location_id: tokens.location_id ?? null,
       location_name: tokens.location_name ?? null,
@@ -108,13 +108,14 @@ export async function GET(request: Request) {
     }, { onConflict: 'restaurant_id' });
 
     if (error) {
-      console.error('[hubrise callback] upsert error:', error.message);
-      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(error.message));
+      const errorMessage = error?.message ?? 'Erreur Supabase inconnue';
+      console.error('[hubrise callback] upsert error:', errorMessage);
+      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(errorMessage));
     }
 
-    return redirectWith(url, `/?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(parsed.restaurantId ?? '')}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    return redirectWith(url, `/?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(parsedState!.restaurantId ?? '')}`);
+  } catch {
+    const msg = 'Erreur inconnue';
     console.error('[hubrise callback] unexpected error:', msg);
     return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(msg.slice(0, 200)));
   }

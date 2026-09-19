@@ -1,38 +1,11 @@
+import { buildRealtimeToolDefinitions } from '@/lib/realtime/tool-protocol';
+import { createToolSessionToken } from '@/lib/realtime/session-token';
+
+export const runtime = 'nodejs';
+
 const supportedBrands = new Set(['Burger King', "McDonald's", 'Quick', 'KFC']);
 
-const orderTool = {
-  type: 'function',
-  name: 'update_order',
-  description:
-    "Synchronise le panier affiché au client. Appelle cet outil après chaque ajout, retrait, modification ou confirmation, avec l'intégralité du panier actuel.",
-  parameters: {
-    type: 'object',
-    properties: {
-      items: {
-        type: 'array',
-        description: 'Tous les produits présents dans le panier après la modification.',
-        items: {
-          type: 'object',
-          properties: {
-            product_id: {
-              type: 'string',
-              enum: ['signature_menu', 'tenders_6', 'medium_fries', 'zero_cola'],
-            },
-            quantity: { type: 'integer', minimum: 1, maximum: 20 },
-          },
-          required: ['product_id', 'quantity'],
-          additionalProperties: false,
-        },
-      },
-      status: {
-        type: 'string',
-        enum: ['editing', 'ready_to_confirm', 'confirmed'],
-      },
-    },
-    required: ['items', 'status'],
-    additionalProperties: false,
-  },
-};
+const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
 export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -47,11 +20,19 @@ export async function POST(request: Request) {
 
   const requestedBrand = new URL(request.url).searchParams.get('brand') ?? '';
   const brand = supportedBrands.has(requestedBrand) ? requestedBrand : 'Burger King';
+  const url = new URL(request.url);
+  const configuredRestaurantId = process.env.DRIVEVOICE_RESTAURANT_ID || demoRestaurantId;
+  const requestedRestaurantId = url.searchParams.get('restaurantId');
+  const restaurantId = requestedRestaurantId || configuredRestaurantId;
+  if (restaurantId !== configuredRestaurantId) {
+    return Response.json({ error: 'Restaurant non autorisé pour cette session.' }, { status: 403 });
+  }
+  const conversationId = url.searchParams.get('conversationId') || crypto.randomUUID();
   const session = {
     type: 'realtime',
     model: 'gpt-realtime-2.1-mini',
     output_modalities: ['audio'],
-    max_output_tokens: 700,
+    max_output_tokens: 4096,
     instructions: `Tu es DriveVoice, un équipier français qui prend les commandes au drive de ${brand}.
 
 OBJECTIF
@@ -68,8 +49,11 @@ CARTE DE DÉMONSTRATION
 RÈGLES DU PANIER
 - N'invente aucun autre produit ou prix. Si un produit n'est pas disponible, dis-le brièvement et propose le choix le plus proche.
 - Après CHAQUE ajout, retrait ou changement, appelle update_order avec le panier complet, puis confirme brièvement à l'oral.
+- Utilise get_basket après une reconnexion ou si l'état du panier n'est pas certain.
 - Quand le client dit que c'est tout, appelle update_order avec status ready_to_confirm, récapitule les articles et demande une confirmation explicite.
 - Ne mets status confirmed que lorsque le client confirme clairement.
+- Après une confirmation explicite, appelle submit_order avec confirmation explicit et n'annonce jamais un numéro inventé.
+- Si la transmission échoue, explique-le simplement et propose de réessayer ou un transfert humain.
 - Si la demande est ambiguë, pose une question avant de modifier le panier.
 - Le bouton de confirmation de l'écran vaut confirmation explicite.
 
@@ -109,7 +93,7 @@ STYLE VOCAL
         speed: 1.04,
       },
     },
-    tools: [orderTool],
+    tools: buildRealtimeToolDefinitions(),
     tool_choice: 'auto',
   };
 
@@ -134,7 +118,11 @@ STYLE VOCAL
 
     return new Response(body, {
       status: 200,
-      headers: { 'Content-Type': 'application/sdp' },
+      headers: {
+        'Content-Type': 'application/sdp',
+        'Cache-Control': 'no-store',
+        'x-drivevoice-session': createToolSessionToken({ conversationId, restaurantId }),
+      },
     });
   } catch {
     return Response.json({ error: "Le service vocal est momentanément indisponible." }, { status: 502 });
