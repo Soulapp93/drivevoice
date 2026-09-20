@@ -206,6 +206,7 @@ export async function POST(request: Request) {
       body: form,
     });
     const body = await openAIResponse.text();
+    console.log('[voice/session] openai response', { status: openAIResponse.status, bodyPreview: body.slice(0, 300) });
 
     if (!openAIResponse.ok) {
       console.error('[voice/session] openai realtime failed', { status: openAIResponse.status, body: body.slice(0, 500) });
