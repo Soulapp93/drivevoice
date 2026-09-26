@@ -1,15 +1,15 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import { useVoice } from '@/lib/voice/use-voice';
 
 const money = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
+const demoRestaurantName = 'La Piazza République';
 
 export function VoicePanel() {
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [text, setText] = useState('');
-  const { status, transcript, basket, isStarted, start, stop, sendText, confirmOrder } = useVoice({
-    brand: 'Burger King',
+  const { status, basket, isStarted, start, stop } = useVoice({
+    brand: demoRestaurantName,
     restaurantId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
   });
 
@@ -62,52 +62,6 @@ export function VoicePanel() {
             Arrêter
           </button>
         )}
-        <button
-          type="button"
-          onClick={confirmOrder}
-          disabled={!isStarted}
-          className="rounded-lg bg-green-600 px-4 py-2 text-white hover:bg-green-700 disabled:opacity-50"
-        >
-          Confirmer la commande
-        </button>
-      </div>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!text.trim()) return;
-          sendText(text);
-          setText('');
-        }}
-        className="flex gap-2"
-      >
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Écrire un message à l'agent…"
-          disabled={!isStarted}
-          className="flex-1 rounded-lg border px-3 py-2"
-        />
-        <button
-          type="submit"
-          disabled={!isStarted || !text.trim()}
-          className="rounded-lg bg-gray-900 px-4 py-2 text-white disabled:opacity-50"
-        >
-          Envoyer
-        </button>
-      </form>
-
-      <div className="max-h-80 overflow-y-auto rounded-lg border p-4">
-        {transcript.length === 0 && <p className="text-sm text-gray-400">Aucun message pour l’instant.</p>}
-        {transcript.map((message) => (
-          <div
-            key={message.id}
-            className={`mb-2 text-sm ${message.speaker === 'client' ? 'text-blue-700' : 'text-gray-700'}`}
-          >
-            <span className="font-semibold">{message.speaker === 'client' ? 'Client' : 'Agent'} :</span> {message.text}
-          </div>
-        ))}
       </div>
 
       {basket.items.length > 0 && (

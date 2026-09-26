@@ -7,13 +7,15 @@ export type RealtimeEventType =
   | 'input_audio_buffer.speech_started'
   | 'input_audio_buffer.speech_stopped'
   | 'conversation.item.created'
+  | 'conversation.item.added'
   | 'response.created'
   | 'response.output_item.added'
+  | 'response.output_item.done'
   | 'response.function_call_arguments.done'
   | 'response.output_audio.delta'
   | 'response.output_audio.done'
-  | 'response.audio_transcript.delta'
-  | 'response.audio_transcript.done'
+  | 'response.audio.delta'
+  | 'response.audio.done'
   | 'response.done'
   | 'response.cancelled'
   | 'response.failed'
@@ -52,6 +54,8 @@ export class RealtimeAudioSession {
   private started = false;
   private generation = 0;
   private signalingPromise: Promise<void> | null = null;
+  private establishedConversationId: string | null = null;
+  private restartConversationId: string | null = null;
   private config: RealtimeSessionConfig;
 
   sessionToken: string | null = null;
@@ -80,9 +84,26 @@ export class RealtimeAudioSession {
         this.audioElement.autoplay = true;
         this.audioElement.setAttribute('autoplay', '');
         this.audioElement.setAttribute('playsinline', '');
+        // Prépare la sortie audio pendant le geste utilisateur. La piste
+        // distante arrive plus tard, parfois après que Safari a perdu le
+        // contexte de lecture autorisé.
+        this.audioElement.muted = true;
+        void this.audioElement.play().catch(() => {
+          // La lecture sera retentée quand la piste distante sera reçue.
+        });
       }
 
-      const localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Le navigateur ne fournit pas accès au microphone.');
+      }
+      const localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       const peer = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
       });
@@ -106,15 +127,16 @@ export class RealtimeAudioSession {
         this.emit('remote_track', { stream, track: event.track });
         if (this.audioElement) {
           const audio = this.audioElement;
-          const wasMuted = audio.muted;
           audio.srcObject = stream;
+          audio.volume = 1;
           // Le démarrage muet est autorisé par Safari/iOS même quand l'arrivée
-          // de la piste distante intervient après le geste utilisateur.
+          // de la piste distante intervient après le geste utilisateur. Le son
+          // est réactivé immédiatement après play() pour éviter un agent muet.
           audio.muted = true;
           audio.play().then(() => {
-            audio.muted = wasMuted;
+            audio.muted = false;
           }).catch((error: unknown) => {
-            audio.muted = wasMuted;
+            audio.muted = false;
             this.emit('audio_playback_error', {
               error: error instanceof Error ? error : new Error('La lecture audio a été bloquée par le navigateur.'),
             });
@@ -148,6 +170,7 @@ export class RealtimeAudioSession {
       await this.waitForIceGathering(peer);
       if (!this.isCurrent(peer, generation)) return;
       await this.completeSignaling(peer, generation);
+      await this.waitForDataChannelOpen(channel, peer, generation);
     } catch (error) {
       // Si la connexion a été remplacée ou fermée pendant le signaling
       // (changement de configuration, arrêt, nouvel essai), l'erreur
@@ -194,6 +217,42 @@ export class RealtimeAudioSession {
     });
   }
 
+  private async waitForDataChannelOpen(channel: RTCDataChannel, peer: RTCPeerConnection, generation: number) {
+    if (channel.readyState === 'open') return;
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timeout = window.setTimeout(() => {
+        finish(new Error('Le canal vocal n’a pas pu être ouvert.'));
+      }, 12_000);
+
+      const cleanup = () => {
+        window.clearTimeout(timeout);
+        channel.removeEventListener('open', onOpen);
+        channel.removeEventListener('close', onClose);
+        channel.removeEventListener('error', onError);
+      };
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve();
+      };
+      const onOpen = () => {
+        if (this.isCurrent(peer, generation)) finish();
+        else finish(new Error('La session vocale a été remplacée.'));
+      };
+      const onClose = () => finish(new Error('Le canal vocal a été fermé.'));
+      const onError = () => finish(new Error('Le canal vocal a rencontré une erreur.'));
+
+      channel.addEventListener('open', onOpen);
+      channel.addEventListener('close', onClose);
+      channel.addEventListener('error', onError);
+      if (channel.readyState === 'open') onOpen();
+    });
+  }
+
   private async completeSignaling(peer: RTCPeerConnection, generation: number) {
     if (!this.isCurrent(peer, generation) || !peer.localDescription) return;
     if (this.signalingPromise) return this.signalingPromise;
@@ -209,15 +268,22 @@ export class RealtimeAudioSession {
   private async exchangeSignaling(peer: RTCPeerConnection, generation: number) {
     if (!peer.localDescription || !this.isCurrent(peer, generation)) return;
 
+    // Validation SDP minimale avant envoi
+    const sdp = peer.localDescription.sdp;
+    if (!sdp || !sdp.startsWith('v=0')) {
+      throw new Error('SDP locale invalide.');
+    }
+
     const params = new URLSearchParams();
     if (this.config.brand) params.set('brand', this.config.brand);
     if (this.config.restaurantId) params.set('restaurantId', this.config.restaurantId);
-    if (this.config.conversationId) params.set('conversationId', this.config.conversationId);
+    const conversationId = this.restartConversationId ?? this.config.conversationId;
+    if (conversationId) params.set('conversationId', conversationId);
 
     const response = await fetch(`/api/voice/session?${params.toString()}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp' },
-      body: peer.localDescription.sdp,
+      body: sdp,
     });
 
     if (!response.ok) {
@@ -226,11 +292,17 @@ export class RealtimeAudioSession {
     }
 
     const answerSdp = await response.text();
+    if (!answerSdp || !answerSdp.startsWith('v=0')) {
+      throw new Error('SDP distante invalide.');
+    }
     if (!this.isCurrent(peer, generation) || peer.signalingState !== 'have-local-offer') return;
     const sessionToken = response.headers.get('x-drivevoice-session');
-    const conversationId = response.headers.get('x-drivevoice-conversation');
+    const negotiatedConversationId = response.headers.get('x-drivevoice-conversation');
     if (sessionToken) this.sessionToken = sessionToken;
-    if (conversationId) this.conversationId = conversationId;
+    if (negotiatedConversationId) {
+      this.conversationId = negotiatedConversationId;
+      this.establishedConversationId = negotiatedConversationId;
+    }
 
     await peer.setRemoteDescription({ type: 'answer', sdp: answerSdp });
   }
@@ -278,12 +350,14 @@ export class RealtimeAudioSession {
         this.emit(type, base);
         break;
       case 'conversation.item.created':
+      case 'conversation.item.added':
         this.emit(type, { ...base, item: raw.item });
         break;
       case 'response.created':
         this.emit(type, { ...base, responseId: String(raw.response_id ?? '') });
         break;
       case 'response.output_item.added':
+      case 'response.output_item.done':
         this.emit(type, {
           ...base,
           responseId: String(raw.response_id ?? ''),
@@ -302,15 +376,13 @@ export class RealtimeAudioSession {
         });
         break;
       case 'response.output_audio.delta':
+      case 'response.audio.delta':
       case 'response.output_audio.done':
-        this.emit(type, { ...base, responseId: String(raw.response_id ?? '') });
-        break;
-      case 'response.audio_transcript.delta':
-      case 'response.audio_transcript.done':
+      case 'response.audio.done':
         this.emit(type, {
           ...base,
           responseId: String(raw.response_id ?? ''),
-          text: typeof raw.delta === 'string' ? raw.delta : typeof raw.transcript === 'string' ? raw.transcript : undefined,
+          text: typeof raw.delta === 'string' ? raw.delta : undefined,
         });
         break;
       case 'response.done':
@@ -322,7 +394,7 @@ export class RealtimeAudioSession {
         this.emit(type, base);
         break;
       case 'error': {
-        const details = raw.error as { message?: string; code?: string } | undefined;
+        const details = raw.error as { message?: string; code?: string; type?: string; param?: string | null } | undefined;
         this.emit('realtime_error', {
           ...base,
           error: new Error(details?.message || 'Erreur Realtime reçue.'),
@@ -350,6 +422,7 @@ export class RealtimeAudioSession {
     this.started = false;
     this.sessionToken = null;
     this.conversationId = null;
+    this.establishedConversationId = null;
     this.signalingPromise = null;
     const channel = this.channel;
     const peer = this.peer;
@@ -369,8 +442,14 @@ export class RealtimeAudioSession {
 
   async restart(): Promise<void> {
     const audioElement = this.audioElement;
+    const conversationId = this.conversationId ?? this.establishedConversationId;
     this.stop();
-    await this.start(audioElement ?? undefined);
+    this.restartConversationId = conversationId;
+    try {
+      await this.start(audioElement ?? undefined);
+    } finally {
+      this.restartConversationId = null;
+    }
   }
 
   private disposeCurrentConnection() {

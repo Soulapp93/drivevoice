@@ -5,10 +5,11 @@ export type RestaurantOrderItem = {
   quantity: number;
   price: number;
   sku_ref?: string;
+  customizations?: string[];
 };
 
 export type RestaurantSubmissionResult =
-  | { success: true; ref: string; via: 'hubrise' | 'kitchen_queue'; orderId?: string | null }
+  | { success: true; ref: string; via: 'hubrise'; orderId?: string | null }
   | { success: false; errorCode: string; message: string; retryable: boolean };
 
 type ReserveResult = {
@@ -31,6 +32,40 @@ function generateRef() {
   return `DV-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 }
 
+function formatMoney(value: number) {
+  return `${Math.max(0, Number(value) || 0).toFixed(2)} EUR`;
+}
+
+export function buildHubRiseOrderPayload(ref: string, items: RestaurantOrderItem[]) {
+  return {
+    status: 'new',
+    channel: 'DriveVoice',
+    private_ref: ref,
+    service_type: 'collection',
+    asap: true,
+    items: items.map((item, index) => ({
+      product_name: item.name,
+      sku_ref: item.sku_ref || `DV-ITEM-${index + 1}`,
+      price: formatMoney(item.price),
+      quantity: String(item.quantity || 1),
+      ...(item.customizations && item.customizations.length > 0
+        ? {
+            options: item.customizations.map((customization) => {
+              const separator = customization.indexOf(':');
+              return {
+                option_list_name: separator > 0 ? customization.slice(0, separator).trim() : 'Personnalisation',
+                name: separator > 0 ? customization.slice(separator + 1).trim() : customization.trim(),
+                quantity: 1,
+              };
+            }),
+          }
+        : {}),
+    })),
+    customer: { first_name: 'Client DriveVoice' },
+    customer_notes: 'Commande drive transmise par DriveVoice',
+  };
+}
+
 export async function submitOrderToRestaurant(params: {
   restaurantId: string;
   conversationId: string;
@@ -48,12 +83,8 @@ export async function submitOrderToRestaurant(params: {
   });
 
   const ref = generateRef();
-  const payloadItems = items.map((item, index) => ({
-    product_name: item.name,
-    sku_ref: item.sku_ref || `DV-ITEM-${index + 1}`,
-    price: String(item.price),
-    quantity: String(item.quantity || 1),
-  }));
+  const payload = buildHubRiseOrderPayload(ref, items);
+  const payloadItems = payload.items;
 
   const { data: reserveData, error: reserveError } = await supabase.rpc('voice_tool_reserve_order', {
     p_conversation_id: conversationId,
@@ -80,57 +111,87 @@ export async function submitOrderToRestaurant(params: {
   }
 
   if (reserve.status === 'already_sent') {
-    return { success: true, ref: reserve.ref ?? ref, via: reserve.hubrise_order_id ? 'hubrise' : 'kitchen_queue', orderId: reserve.hubrise_order_id || null };
+    if (!reserve.hubrise_order_id) {
+      return { success: false, errorCode: 'ORDER_NOT_CONFIRMED_BY_HUBRISE', message: 'Cette commande n’a pas de confirmation HubRise. Le restaurant doit vérifier son état avant une nouvelle tentative.', retryable: false };
+    }
+    return { success: true, ref: reserve.ref ?? ref, via: 'hubrise', orderId: reserve.hubrise_order_id };
   }
   if (reserve.status === 'in_progress') {
     return { success: false, errorCode: 'ORDER_IN_PROGRESS', message: 'La commande est déjà en cours de transmission. Propose au client de patienter.', retryable: true };
   }
 
-  const { data: tokenData } = await supabase.rpc('voice_get_hubrise_access_token', { p_restaurant_id: restaurantId });
-  const accessToken = typeof tokenData === 'string' && tokenData.length > 0 ? tokenData : null;
+  // Acquisition du verrou d'idempotence pour empêcher les doubles envois simultanés
+  const { data: lockAcquired } = await supabase.rpc('voice_acquire_order_lock', {
+    p_conversation_id: conversationId,
+    p_idempotency_key: idempotencyKey,
+    p_ttl_seconds: 30,
+  });
+  if (!lockAcquired) {
+    console.warn('[submit-to-restaurant] order lock already held', { conversationId });
+    return { success: false, errorCode: 'ORDER_IN_PROGRESS', message: 'Une commande est déjà en cours de traitement pour cette session.', retryable: true };
+  }
 
-  if (accessToken) {
-    try {
-      const res = await fetch('https://api.hubrise.com/v1/location/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Access-Token': accessToken },
-        body: JSON.stringify({
-          private_ref: ref,
-          service_type: 'delivery',
-          payment: 'offline',
-          items: payloadItems,
-          total: String(total),
-          customer: { first_name: 'Client DriveVoice' },
-          expected_time: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-          comments: 'Commande drive transmise par DriveVoice',
-        }),
+  try {
+    const { data: tokenData, error: tokenError } = await supabase.rpc('voice_get_hubrise_access_token', { p_restaurant_id: restaurantId });
+    const accessToken = !tokenError && typeof tokenData === 'string' && tokenData.length > 0 ? tokenData : null;
+
+    if (!accessToken) {
+      console.error('[submit-to-restaurant] HubRise access token unavailable', tokenError?.message ?? 'No active token returned');
+      const { error: finalizeError } = await supabase.rpc('voice_tool_finalize_order', {
+        p_idempotency_key: idempotencyKey,
+        p_status: 'failed',
+        p_hubrise_order_id: null,
       });
-      if (res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { id?: string };
-        await supabase.rpc('voice_tool_finalize_order', {
+      if (finalizeError) console.error('[submit-to-restaurant] failed to mark missing-token order', finalizeError.message);
+      return { success: false, errorCode: 'HUBRISE_CONNECTION_UNAVAILABLE', message: 'La connexion HubRise du restaurant est indisponible. La commande n’a pas été envoyée.', retryable: true };
+    }
+
+    const res = await fetch('https://api.hubrise.com/v1/location/orders', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Access-Token': accessToken,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      console.warn('[submit-to-restaurant] HubRise rejected order', res.status);
+      if (res.status < 500) {
+        const { error: finalizeError } = await supabase.rpc('voice_tool_finalize_order', {
           p_idempotency_key: idempotencyKey,
-          p_status: 'sent',
-          p_hubrise_order_id: data.id || null,
+          p_status: 'failed',
+          p_hubrise_order_id: null,
         });
-        return { success: true, ref, via: 'hubrise', orderId: data.id || null };
+        if (finalizeError) console.error('[submit-to-restaurant] failed to mark rejected order', finalizeError.message);
+        return { success: false, errorCode: 'HUBRISE_ORDER_REJECTED', message: 'HubRise a refusé la commande. Elle n’a pas été transmise au restaurant.', retryable: res.status === 429 };
       }
-      console.error('[submit-to-restaurant] hubrise upstream failed', res.status);
-      await supabase.rpc('voice_tool_finalize_order', { p_idempotency_key: idempotencyKey, p_status: 'failed' });
-      return { success: false, errorCode: 'HUBRISE_SUBMISSION_FAILED', message: 'La transmission au restaurant a échoué. Propose au client de réessayer.', retryable: true };
-    } catch (error) {
-      console.error('[submit-to-restaurant] hubrise unexpected failure', error instanceof Error ? error.message : error);
-      await supabase.rpc('voice_tool_finalize_order', { p_idempotency_key: idempotencyKey, p_status: 'failed' });
-      return { success: false, errorCode: 'ORDER_SUBMISSION_FAILED', message: 'La transmission au restaurant a échoué. Propose au client de réessayer.', retryable: true };
+      return { success: false, errorCode: 'HUBRISE_RESPONSE_UNCERTAIN', message: 'HubRise n’a pas confirmé la commande. Vérifiez les commandes du restaurant avant toute nouvelle tentative.', retryable: false };
+    }
+
+    const data = (await res.json().catch(() => ({}))) as { id?: string };
+    if (!data.id) {
+      console.error('[submit-to-restaurant] HubRise response missing order id', { ref });
+      return { success: false, errorCode: 'HUBRISE_RESPONSE_UNCERTAIN', message: 'HubRise n’a pas fourni de confirmation exploitable. Vérifiez les commandes du restaurant avant toute nouvelle tentative.', retryable: false };
+    }
+
+    const { error: finalizeError } = await supabase.rpc('voice_tool_finalize_order', {
+      p_idempotency_key: idempotencyKey,
+      p_status: 'sent',
+      p_hubrise_order_id: data.id,
+    });
+    if (finalizeError) {
+      console.error('[submit-to-restaurant] finalize rpc failed after upstream acceptance', finalizeError.message);
+    }
+    return { success: true, ref, via: 'hubrise', orderId: data.id };
+  } catch (error) {
+    console.error('[submit-to-restaurant] HubRise transmission outcome uncertain', error instanceof Error ? error.message : error);
+    return { success: false, errorCode: 'HUBRISE_RESPONSE_UNCERTAIN', message: 'La transmission à HubRise n’a pas pu être confirmée. Vérifiez les commandes du restaurant avant toute nouvelle tentative.', retryable: false };
+  } finally {
+    try {
+      await supabase.rpc('voice_release_order_lock', { p_conversation_id: conversationId });
+    } catch (err) {
+      console.error('[submit-to-restaurant] lock release failed', err instanceof Error ? err.message : err);
     }
   }
-
-  const { error: finalizeError } = await supabase.rpc('voice_tool_finalize_order', {
-    p_idempotency_key: idempotencyKey,
-    p_status: 'sent',
-  });
-  if (finalizeError) {
-    console.error('[submit-to-restaurant] finalize rpc failed', finalizeError.message);
-    return { success: false, errorCode: 'ORDER_STORAGE_ERROR', message: 'La commande n’a pas pu être finalisée.', retryable: true };
-  }
-  return { success: true, ref, via: 'kitchen_queue' };
 }

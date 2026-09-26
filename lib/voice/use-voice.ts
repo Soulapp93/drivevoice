@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { VoiceOrchestrator, type TranscriptMessage, type VoiceStatus } from './voice-orchestrator';
+import { VoiceOrchestrator, type VoiceStatus } from './voice-orchestrator';
 import type { CatalogEntry } from './basket-manager';
+import { logRealtimeEvent } from '@/lib/realtime/logging';
 
 export type UseVoiceOptions = {
   brand?: string;
@@ -14,15 +15,20 @@ export type OrderResult = { ref: string; status: 'submitted' | 'failed'; message
 export function useVoice(options: UseVoiceOptions = {}) {
   const orchestratorRef = useRef<VoiceOrchestrator | null>(null);
   const [status, setStatus] = useState<VoiceStatus>({ connection: 'idle', conversation: 'idle' });
-  const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
   const [basket, setBasket] = useState<{ items: unknown[]; total: number; status: string }>({ items: [], total: 0, status: 'editing' });
   const [orderResult, setOrderResult] = useState<OrderResult | null>(null);
   const [isStarted, setIsStarted] = useState(false);
 
   useEffect(() => {
     const orchestrator = new VoiceOrchestrator({
-      onStatusChange: setStatus,
-      onTranscriptUpdate: setTranscript,
+      onStatusChange: (nextStatus) => {
+        setStatus(nextStatus);
+        if (nextStatus.connection === 'connected') {
+          setIsStarted(true);
+        } else if (nextStatus.connection === 'idle') {
+          setIsStarted(false);
+        }
+      },
       onBasketUpdate: setBasket,
       onOrderUpdate: setOrderResult,
     });
@@ -43,8 +49,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
   }, [options.brand, options.restaurantId, options.conversationId, options.catalog]);
 
   const start = useCallback(async (audioElement?: HTMLAudioElement) => {
-    await orchestratorRef.current?.start(audioElement);
     setIsStarted(true);
+    const started = await orchestratorRef.current?.start(audioElement);
+    if (started !== true) setIsStarted(false);
   }, []);
 
   const stop = useCallback(() => {
@@ -56,23 +63,34 @@ export function useVoice(options: UseVoiceOptions = {}) {
     orchestratorRef.current?.sendText(text);
   }, []);
 
+  const interrupt = useCallback(() => {
+    orchestratorRef.current?.interrupt();
+  }, []);
+
   const confirmOrder = useCallback(() => {
     orchestratorRef.current?.confirmOrder();
   }, []);
 
   const resetForNextCustomer = useCallback(() => {
+    const traceId = `reset-${Date.now()}`;
+    logRealtimeEvent('reset.started', { traceId });
+
+    // Séquence atomique : orchestrator stop + state updates batched
     orchestratorRef.current?.resetForNextCustomer();
     setOrderResult(null);
+    setIsStarted(false);
+
+    logRealtimeEvent('reset.completed', { traceId });
   }, []);
 
   return {
     status,
-    transcript,
     basket,
     isStarted,
     start,
     stop,
     sendText,
+    interrupt,
     confirmOrder,
     orderResult,
     resetForNextCustomer,

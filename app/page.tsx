@@ -1,6 +1,7 @@
 'use client';
 
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { isSupabaseConfigured, supabase, supabaseAnonKey } from '@/lib/supabase/client';
 import { fetchBrandsFromDb, syncBrandsToDb, type MasterBrandInput } from '@/lib/supabase/sync';
 import { createRestaurant, deleteRestaurant, fetchRestaurantProducts, fetchRestaurants, updateRestaurantProduct, type RestaurantInfo, type RestaurantProductInfo } from '@/lib/supabase/restaurants';
@@ -9,6 +10,7 @@ import { RealtimeResponseController, type ConversationState } from '@/lib/realti
 import { applyUpdateOrder, buildRealtimeToolDefinitions, createIdempotencyKey, jsonToolOutput, normalizeCatalog, parseUpdateOrderArguments, type BasketSnapshot, type ToolResult } from '@/lib/realtime/tool-protocol';
 import { logRealtimeEvent } from '@/lib/realtime/logging';
 import { OrderWorkspace as VoiceOrderWorkspace } from '@/components/voice/order-workspace';
+import { RestaurantDashboardPanel } from '@/components/restaurant-dashboard-panel';
 
 const RESPONSE_INACTIVITY_TIMEOUT_MS = 15_000;
 const RESPONSE_MAX_DURATION_MS = 45_000;
@@ -113,9 +115,9 @@ const menuOptionMatchesSize = (name: string, selectedSize: string, type: 'accomp
   if (/50cl/.test(text)) return /king|extra|xxl|xl/.test(size);
   return true;
 };
-function OrderWorkspace({ products, agentWelcome, agentRules }: { products: CatalogProduct[]; agentWelcome: string; agentRules: Array<[string, boolean]> }) {
+function OrderWorkspace({ products, agentWelcome, agentRules, restaurantName, restaurantId }: { products: CatalogProduct[]; agentWelcome: string; agentRules: Array<[string, boolean]>; restaurantName: string; restaurantId: string }) {
   return (
-    <VoiceOrderWorkspace products={products} agentWelcome={agentWelcome} agentRules={agentRules} />
+    <VoiceOrderWorkspace products={products} agentWelcome={agentWelcome} agentRules={agentRules} restaurantName={restaurantName} restaurantId={restaurantId} />
   );
 }
 
@@ -155,6 +157,8 @@ type CatalogProduct = {
 };
 
 const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+const burgerKingDemoRestaurantId = '31065664-a449-4fe3-a311-de880b436726';
+const demoRestaurantName = 'La Piazza République';
 
 function mapRestaurantProduct(product: RestaurantProductInfo, index: number): CatalogProduct {
   const productId = String(product.product_id ?? product.id ?? `hubrise-${index}`);
@@ -208,19 +212,24 @@ function mapRestaurantProduct(product: RestaurantProductInfo, index: number): Ca
   };
 }
 
+type UserRole = 'directeur' | 'manager' | 'operateur';
+
 const workspaceTabs: Array<{ id: WorkspaceTab; label: string; short: string; icon: string }> = [
-  { id: 'order', label: 'Écran de commande', short: 'Commande', icon: '◉' },
-  { id: 'dashboard', label: 'Pilotage', short: 'Pilotage', icon: '▥' },
-  { id: 'integrations', label: 'Configuration technique', short: 'Technique', icon: '⌁' },
-  { id: 'catalog', label: 'Carte du restaurant', short: 'Carte', icon: '▦' },
-  { id: 'agent', label: 'Configuration de l’agent IA', short: 'Agent IA', icon: '✦' },
-  { id: 'account', label: 'Mon compte', short: 'Mon compte', icon: '◎' },
+  { id: 'order', label: 'Ecran de commande', short: 'COMMANDE', icon: '◉' },
+  { id: 'dashboard', label: 'Pilotage', short: 'PILOTAGE', icon: '▥' },
+  { id: 'integrations', label: 'Configuration caisse', short: 'CAISSE', icon: '⌁' },
+  { id: 'catalog', label: 'Catalogue produits', short: 'CATALOGUE', icon: '▦' },
+  { id: 'agent', label: 'Configuration assistant vocal', short: 'ASSISTANT', icon: '✦' },
+  { id: 'account', label: 'Compte restaurant', short: 'COMPTE', icon: '◎' },
 ];
+
+const restrictedTabsForManager: WorkspaceTab[] = ['integrations', 'catalog', 'agent'];
+const restrictedTabsForOperateur: WorkspaceTab[] = ['integrations', 'catalog', 'agent', 'account'];
 
 const burgerKingCategoryTemplate = [
   ['Nouveautés', '✦'], ['Menus', '▤'], ['Burgers', '🍔'], ['Menus enfants', '♛'], ['À partager', '🍗'],
-  ['Tortillas & Wraps', '🌯'], ['Snacks & Sauces', '🍟'], ['Salades', '🥗'],
-  ['Desserts & Boissons', '🥤'], ['Offres du moment', '％'], ['Goodies', '🎁'],
+  ['Tortillas & Wraps', '🌯'], ['Snacks & Sauces', '🍟'], ['Bon et Pas Cher', '€'], ['Salades', '🥗'],
+  ['Desserts & Boissons', '🥤'], ['King Breakfast', '☀'], ['Poulet du Dimanche', '🍗'],
 ] as const;
 
 const subcategoryTemplates: Record<string, string[]> = {
@@ -229,8 +238,11 @@ const subcategoryTemplates: Record<string, string[]> = {
   'À partager': ['Tous', 'Krispper Tenders', 'Kingbox', 'Baby Burgers'],
   'Tortillas & Wraps': ['Tous', 'King Tortillas', 'King Wraps'],
   'Snacks & Sauces': ['Tous', 'Krispper Tenders', 'King Nuggets', 'Frites & Gaufrettes', 'Chili Cheese', 'Onion Rings', 'Sauces', 'King Fries'],
+  'Bon et Pas Cher': ['Tous'],
+  'Salades': ['Tous', 'Poulet', 'Veggie', 'Sauces Classiques', 'Autres'],
   'Desserts & Boissons': ['Tous', 'Glaces', 'Pâtisseries', 'Boissons froides', 'Boissons chaudes', 'Autres'],
-  'Offres du moment': ['Tous', 'Kingbox', 'Autres'],
+  'King Breakfast': ['Tous', 'Pâtisseries', 'Autres'],
+  'Poulet du Dimanche': ['Tous'],
 };
 
 const bkDrinks = [
@@ -476,12 +488,24 @@ const bkSeed: BkSeed[] = [
   ['King Yaourt', 'Desserts & Boissons', 'Autres', 1.9, 'Yaourt à boire à l’arôme naturel de fraise', '🍓', 'simple'],
   ['King Fruits', 'Desserts & Boissons', 'Autres', 2, 'Quartiers de fruits de saison', '🍎', 'simple'],
   ['Kingbox 10 King Nuggets® + 10 Chili Cheese', 'Offres du moment', 'Kingbox', 10.5, '10 King Nuggets et 10 Chili Cheese à partager', '📦', 'bundle'],
-  ['Kingbox 10 Onion Rings + 10 Chili Cheese', 'Offres du moment', 'Kingbox', 10.5, '10 Onion Rings et 10 Chili Cheese à partager', '📦', 'bundle'],
-  ['Kingbox 20 King Nuggets®', 'Offres du moment', 'Kingbox', 10.5, '20 King Nuggets à partager', '📦', 'bundle'],
-  ['3 Menus + 1 Kingbox', 'Offres du moment', 'Autres', 30.5, 'Offre à partager : 3 menus au choix et 1 Kingbox', '🎉', 'bundle'],
-  ['2 Menus + 1 Kingbox', 'Offres du moment', 'Autres', 23.2, 'Offre à partager : 2 menus au choix et 1 Kingbox', '🎉', 'bundle'],
-  ['T-shirt K2000', 'Goodies', '', 3.3, 'Goodie collector Burger King', '👕', 'simple'],
-  ['Mug Charmed', 'Goodies', '', 3.3, 'Goodie collector Burger King', '☕', 'simple'],
+  ['Kingbox 10 Onion Rings + 10 Chili Cheese', 'À partager', 'Kingbox', 10.5, '10 Onion Rings et 10 Chili Cheese à partager', '📦', 'bundle'],
+  ['Kingbox 20 King Nuggets®', 'À partager', 'Kingbox', 10.5, '20 King Nuggets à partager', '📦', 'bundle'],
+  ['Menu Bon et Pas Cher Duo', 'Bon et Pas Cher', '', 9.9, 'Un menu Bon et Pas Cher à composer à deux', '🍔', 'menu', 'burger'],
+  ['Menu Bon et Pas Cher Classique', 'Bon et Pas Cher', '', 6.9, 'Un menu Bon et Pas Cher avec accompagnement et boisson', '🍔', 'menu', 'burger'],
+  ['Menu Bon et Pas Cher +', 'Bon et Pas Cher', '', 8.9, 'Un menu Bon et Pas Cher généreux avec accompagnement et boisson', '🍔', 'menu', 'burger'],
+  ['Caesar Chicken Bowl', 'Salades', 'Poulet', 9.9, 'Bowl Caesar au poulet croustillant, salade et sauce Caesar', '🥗', 'menu', 'burger'],
+  ['Caesar Chicken Bowl', 'Salades', 'Poulet', 7.9, 'Bowl Caesar au poulet croustillant', '🥗', 'simple'],
+  ['Veggie Caesar Chicken Bowl', 'Salades', 'Veggie', 7.9, 'Bowl Caesar en version végétarienne', '🥗', 'menu', 'burger'],
+  ['Petite salade', 'Salades', 'Veggie', 3.5, 'Petite salade fraîche', '🥗', 'simple'],
+  ['King Carotte', 'Salades', 'Veggie', 2.9, 'Bâtonnets de carotte croquants', '🥕', 'simple'],
+  ['Sauce balsamique tomates', 'Salades', 'Autres', 0.6, 'Sauce balsamique aux tomates', '🥫', 'simple'],
+  ['Donut Chocolat Noisette', 'King Breakfast', 'Pâtisseries', 2.2, 'Donut gourmand au chocolat et à la noisette', '🍩', 'simple'],
+  ['Muffin Chocolat Noisette', 'King Breakfast', 'Pâtisseries', 2.5, 'Muffin moelleux au chocolat et à la noisette', '🧁', 'simple'],
+  ['Bacon & Cheese', 'King Breakfast', 'Autres', 5.9, 'Bacon, fromage et pain moelleux', '🥓', 'simple'],
+  ['Box pour 4 - Nuggets / Tenders / Smoky Chicken', 'Poulet du Dimanche', '', 39.8, 'Une box généreuse pour 4 personnes', '🍗', 'bundle'],
+  ['Box pour 2 - Nuggets / Tenders / Smoky Chicken', 'Poulet du Dimanche', '', 19.9, 'Une box généreuse pour 2 personnes', '🍗', 'bundle'],
+  ['Box pour 2 - Nuggets / Smoky Chicken', 'Poulet du Dimanche', '', 19.9, 'Une box pour 2 avec nuggets et Smoky Chicken', '🍗', 'bundle'],
+  ['Red Bull Mûre Givrée & Vanille (25cl)', 'Desserts & Boissons', 'Boissons froides', 3.9, 'Boisson énergisante Red Bull saveur mûre givrée et vanille', '🥤', 'simple'],
 ];
 
 const bkOfficialImages: Record<string, string> = {
@@ -535,6 +559,14 @@ const bkOfficialImages: Record<string, string> = {
 };
 
 Object.assign(bkOfficialImages, {
+  'Red Bull Mûre Givrée & Vanille (25cl)': 'https://medias.burgerking.fr/_prd/img/products/c/68/c68237e6-523b-49f0-a3de-688ad0f607ab_',
+  'Caesar Chicken Bowl': 'https://medias.burgerking.fr/_prd/img/products/5/f3/5f34d025-5374-44f9-affb-f7409c6a350c_',
+  'Petite salade': 'https://medias.burgerking.fr/_prd/img/products/1/bc/1bc59fbd-6651-45d0-9035-48ed80e41644_',
+  'King Carotte': 'https://medias.burgerking.fr/_prd/img/products/d/48/d4807df5-3d95-4d63-9e01-7c62ba50695f_',
+  'Sauce balsamique tomates': 'https://medias.burgerking.fr/_prd/img/products/1/18/118a0455-6145-448c-8727-454c92a7bee5_',
+  'Donut Chocolat Noisette': 'https://medias.burgerking.fr/_prd/img/products/b/47/b47a0f8c-181b-4eed-a7b6-a0d933df4cf9_',
+  'Muffin Chocolat Noisette': 'https://medias.burgerking.fr/_prd/img/products/a/06/a06167de-fc69-48f0-95a1-1bb3b63d2243_',
+  'Bacon & Cheese': 'https://medias.burgerking.fr/_prd/img/products/e/cf/ecf7f0a2-0f12-4e04-8e29-ccbdb1c8130f_',
   'Big King XXL®': 'https://medias.burgerking.fr/_prd/img/products/4/ff/4ff723fd-ab65-4d10-8b16-0d1301204753_',
   'Veggie Whopper': 'https://medias.burgerking.fr/_prd/img/products/6/d6/6d6df3c3-a852-4567-9fd7-027d2a70c917_',
   'Kingbox 10 King Nuggets® + 10 Chili Cheese': 'https://medias.burgerking.fr/_prd/img/products/9/de/9dea7277-61c2-4bc2-a6b8-fe654cea3cc0_',
@@ -602,6 +634,14 @@ Object.assign(bkOfficialImages, {
 });
 
 const bkOfficialMenuImages: Record<string, string> = {
+  'Menu Bon et Pas Cher Duo': 'https://medias.burgerking.fr/_prd/img/menu/8f82ee08-aea3-4f8f-9ff4-dd3bca3bf59d_',
+  'Menu Bon et Pas Cher Classique': 'https://medias.burgerking.fr/_prd/img/menu/c814c064-12cc-46a1-b655-9cdd636811fe_',
+  'Menu Bon et Pas Cher +': 'https://medias.burgerking.fr/_prd/img/menu/3cb4a31c-daf4-43a8-99e5-a907d89e8310_',
+  'Caesar Chicken Bowl': 'https://medias.burgerking.fr/_prd/img/menu/d577737c-d363-49ab-aab1-f6ddaf3b5536_',
+  'Veggie Caesar Chicken Bowl': 'https://medias.burgerking.fr/_prd/img/menu/751dbd38-63c0-4955-81bb-3fd322f288f8_',
+  'Box pour 4 - Nuggets / Tenders / Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/da117898-4075-440e-bdf3-f490d62681f2_',
+  'Box pour 2 - Nuggets / Tenders / Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/54e342b7-2450-45d9-864c-49757bb70673_',
+  'Box pour 2 - Nuggets / Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/6a75c2ce-54ad-4940-b4a3-447a1ae0eb6b_',
   'Master des Chefs': 'https://medias.burgerking.fr/_prd/img/menu/7df3b3f5-d00b-4876-a11c-ad5285cdca72_',
   'Master Sarran Mozzarella': 'https://medias.burgerking.fr/_prd/img/menu/85856066-4a51-4876-95a5-40921afdd3e9_',
   'Master Pairet Poivre': 'https://medias.burgerking.fr/_prd/img/menu/e5953da4-e59a-459f-84b1-59b08a6e0526_',
@@ -851,71 +891,6 @@ function SectionHeading({ eyebrow, title, description, action }: { eyebrow: stri
   );
 }
 
-function DashboardPanel() {
-  const [ordersOpen, setOrdersOpen] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
-  const [dashboardPeriod, setDashboardPeriod] = useState('Aujourd’hui');
-  const [periodMenuOpen, setPeriodMenuOpen] = useState(false);
-  const hourly = [24, 38, 48, 62, 78, 91, 86, 70, 58, 81, 96, 74];
-  const recentOrders = [
-    { id: '#DV-1048', date: '2026-09-09', time: '12:42', channel: 'Vocal', total: '18,60 €', status: 'Préparation', duration: '1 min 38 s', items: ['Menu Master des Chefs × 1', 'King Fries × 1'], transcript: [['Client', 'Bonjour, je voudrais un Master des Chefs avec des frites.'], ['DriveVoice IA', 'Très bien. Quelle boisson souhaitez-vous avec votre menu ?'], ['Client', 'Un Coca-Cola zéro, s’il vous plaît.']] },
-    { id: '#DV-1047', date: '2026-09-09', time: '12:39', channel: 'Vocal', total: '12,90 €', status: 'Remise', duration: '2 min 04 s', items: ['Whopper × 1', 'Frites moyennes × 1'], transcript: [['Client', 'Je prends un Whopper et des frites moyennes.'], ['DriveVoice IA', 'Votre commande est bien enregistrée.']] },
-    { id: '#DV-1046', date: '2026-09-09', time: '12:36', channel: 'Texte', total: '21,40 €', status: 'Terminée', duration: '1 min 21 s', items: ['Menu Double Cheese Bacon × 1', 'King Fusion × 1'], transcript: [['Client', 'Un menu Double Cheese Bacon et un dessert.'], ['DriveVoice IA', 'Je vous propose un King Fusion. Confirmez-vous ?']] },
-    { id: '#DV-1045', date: '2026-09-09', time: '12:31', channel: 'Vocal', total: '15,70 €', status: 'Terminée', duration: '1 min 47 s', items: ['Menu King Nuggets × 1'], transcript: [['Client', 'Je voudrais un menu King Nuggets.'], ['DriveVoice IA', 'Quelle boisson et quelle taille de frites choisissez-vous ?']] },
-  ];
-  const exportOrders = () => {
-    const header = ['Commande', 'Date', 'Heure', 'Canal', 'Montant', 'Statut', 'Temps de prise'];
-    const rows = recentOrders.map((order) => [order.id, order.date, order.time, order.channel, order.total, order.status, order.duration]);
-    const csv = [header, ...rows].map((row) => row.map((value) => `"${value.replaceAll('"', '""')}"`).join(';')).join('\n');
-    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `drivevoice-commandes-${dashboardPeriod.toLowerCase().replaceAll(' ', '-')}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  return (
-    <div>
-      <SectionHeading eyebrow="Pilotage temps réel" title="Tableau de bord opérationnel" description="Suivez les performances de la voie drive, la qualité des conversations et les ventes générées par l'agent vocal." action={<div className="relative flex gap-2"><button onClick={() => setPeriodMenuOpen((open) => !open)} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-2 text-xs font-black">{dashboardPeriod}⌄</button>{periodMenuOpen && <div className="absolute right-[92px] top-11 z-20 w-40 rounded-2xl border border-[#e2e7e0] bg-white p-2 shadow-xl">{['Aujourd’hui', 'Hier', 'Cette semaine', 'Ce mois', 'Cette année'].map((period) => <button key={period} onClick={() => { setDashboardPeriod(period); setPeriodMenuOpen(false); }} className={`block w-full rounded-xl px-3 py-2.5 text-left text-xs font-black ${dashboardPeriod === period ? 'bg-[#eaf5ec] text-[#27894a]' : 'hover:bg-[#f4f6f2]'}`}>{period}</button>)}</div>}<button onClick={exportOrders} className="rounded-xl bg-[#0b1f14] px-4 py-2 text-xs font-black text-white transition hover:bg-[#173b27]">Exporter CSV</button></div>} />
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        {[
-          ['Commandes', '248', '+12,4 %', '◉'],
-          ['Chiffre d’affaires', '4 286 €', '+8,7 %', '€'],
-          ['Panier moyen', '17,28 €', '+1,4 %', '↗'],
-          ['Temps de prise', '1 min 42', '-18 sec', '◷'],
-          ['Résolution vocale', '96,8 %', '+2,1 pts', '✦'],
-        ].map(([label, value, trend, icon]) => <button key={label} onClick={() => label === 'Commandes' && setOrdersOpen(true)} className={`${panelCard} p-5 text-left transition hover:-translate-y-0.5 hover:border-[#ffb09c] ${label === 'Commandes' ? 'cursor-pointer' : 'cursor-default'}`}><div className="flex items-center justify-between"><span className="text-xs font-bold text-[#7e887f]">{label}</span><span className="grid h-9 w-9 place-items-center rounded-xl bg-[#f1f4ef] font-black text-[#ff5a36]">{icon}</span></div><p className="mt-5 text-3xl font-black tracking-[-.05em]">{value}</p><p className={`mt-2 text-xs font-black ${trend.startsWith('-') && label !== 'Temps de prise' ? 'text-[#e04d39]' : 'text-[#2a9b55]'}`}>{trend} <span className="font-semibold text-[#a0a8a1]">vs. hier</span></p>{label === 'Commandes' && <p className="mt-3 text-[10px] font-black text-[#ff5a36]">Cliquer pour voir le détail →</p>}</button>)}
-      </div>
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.45fr_.8fr]">
-        <section className={`${panelCard} p-6`}>
-          <div className="flex items-start justify-between"><div><h2 className="text-lg font-black">Volume de commandes</h2><p className="mt-1 text-xs text-[#879088]">Commandes par tranche de 30 minutes</p></div><span className="rounded-full bg-[#e6f7eb] px-3 py-1 text-xs font-black text-[#248b4a]">En direct</span></div>
-          <div className="mt-8 flex h-64 items-end gap-2 rounded-2xl bg-[#f7f8f5] px-5 pb-5 pt-8">
-            {hourly.map((height, index) => <div key={index} className="group flex h-full flex-1 items-end"><div className="relative w-full rounded-t-lg bg-[#163423] transition hover:bg-[#ff5a36]" style={{ height: `${height}%` }}><span className="absolute -top-7 left-1/2 hidden -translate-x-1/2 rounded bg-[#0b1f14] px-2 py-1 text-[10px] font-bold text-white group-hover:block">{Math.round(height / 3)}</span></div></div>)}
-          </div>
-          <div className="mt-3 flex justify-between px-1 text-[10px] font-bold text-[#9ba39c]"><span>09:00</span><span>11:00</span><span>13:00</span><span>15:00</span><span>17:00</span><span>19:00</span></div>
-        </section>
-        <section className={`${panelCard} p-6`}>
-          <h2 className="text-lg font-black">Qualité des conversations</h2><p className="mt-1 text-xs text-[#879088]">Analyse automatique des 248 sessions</p>
-          <div className="mx-auto mt-7 grid h-40 w-40 place-items-center rounded-full" style={{ background: 'conic-gradient(#ff5a36 0 84%, #ffc647 84% 96%, #e9ece7 96%)' }}><div className="grid h-28 w-28 place-items-center rounded-full bg-white text-center"><div><strong className="text-3xl font-black">4,7</strong><p className="text-[10px] font-bold uppercase tracking-widest text-[#9aa29b]">score moyen</p></div></div></div>
-          <div className="mt-7 space-y-3 text-xs"><div className="flex justify-between"><span className="font-bold text-[#657068]">Compréhension correcte</span><strong>96,8 %</strong></div><div className="flex justify-between"><span className="font-bold text-[#657068]">Intervention humaine</span><strong>3,2 %</strong></div><div className="flex justify-between"><span className="font-bold text-[#657068]">Abandon</span><strong>1,6 %</strong></div></div>
-        </section>
-      </div>
-      <section className={`${panelCard} mt-5 overflow-hidden`}><div className="flex items-center justify-between border-b border-[#e8ebe6] p-6"><div><h2 className="text-lg font-black">Dernières commandes</h2><p className="mt-1 text-xs text-[#879088]">Synchronisation KDS instantanée</p></div><button onClick={() => setOrdersOpen(true)} className="text-xs font-black text-[#ff5a36]">Voir toutes →</button></div><div className="overflow-x-auto"><table className="w-full min-w-[650px] text-left text-sm"><thead className="bg-[#f8f9f6] text-[10px] uppercase tracking-widest text-[#8d968e]"><tr>{['Commande','Heure','Canal','Montant','Statut'].map(x=><th key={x} className="px-6 py-3">{x}</th>)}</tr></thead><tbody>{recentOrders.map(row=><tr key={row.id} onClick={() => { setSelectedOrder(row.id); setOrdersOpen(true); }} className="cursor-pointer border-t border-[#edf0eb] hover:bg-[#fafbf8]"><td className="px-6 py-4 font-black">{row.id}</td><td className="px-6 py-4 text-[#6f7971]">{row.time}</td><td className="px-6 py-4"><span className="rounded-full bg-[#eef2ed] px-3 py-1 text-xs font-bold">{row.channel}</span></td><td className="px-6 py-4 font-black">{row.total}</td><td className="px-6 py-4"><span className="text-xs font-black text-[#2e9553]">● {row.status}</span></td></tr>)}</tbody></table></div></section>
-      {ordersOpen && <OrderHistory orders={recentOrders} selectedId={selectedOrder} onSelect={setSelectedOrder} onClose={() => { setOrdersOpen(false); setSelectedOrder(null); }} />}
-    </div>
-  );
-}
-
-function OrderHistory({ orders, selectedId, onSelect, onClose }: { orders: Array<{ id: string; date: string; time: string; channel: string; total: string; status: string; duration: string; items: string[]; transcript: string[][] }>; selectedId: string | null; onSelect: (id: string) => void; onClose: () => void }) {
-  const [period, setPeriod] = useState('jour');
-  const [date, setDate] = useState('2026-09-09');
-  const selected = orders.find((order) => order.id === selectedId) ?? null;
-  const filtered = orders.filter((order) => period === 'jour' ? order.date === date : period === 'mois' ? order.date.startsWith(date.slice(0, 7)) : period === 'année' ? order.date.startsWith(date.slice(0, 4)) : true);
-  return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-4 md:p-8"><div className="mx-auto max-w-6xl rounded-[28px] bg-[#f4f6f1] shadow-2xl"><div className="flex items-start justify-between border-b border-[#e1e6df] bg-white p-6 md:p-8"><div><p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">Pilotage des ventes</p><h2 className="mt-2 text-3xl font-black">Toutes les commandes</h2><p className="mt-2 text-sm text-[#738078]">Filtrez, ouvrez une commande et consultez sa conversation complète.</p></div><button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-xl bg-[#f0f3ee] text-xl font-black">×</button></div><div className="grid gap-5 p-5 md:grid-cols-[250px_1fr] md:p-8"><aside className="rounded-2xl bg-white p-5"><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Période</p><div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-1">{['jour', 'mois', 'année', 'toutes'].map((item) => <button key={item} onClick={() => setPeriod(item)} className={`rounded-xl px-4 py-3 text-left text-xs font-black capitalize ${period === item ? 'bg-[#0b1f14] text-white' : 'bg-[#f3f5f1] text-[#68736a]'}`}>{item === 'toutes' ? 'Toutes les dates' : `Par ${item}`}</button>)}</div>{period !== 'toutes' && <label className="mt-5 block text-xs font-black text-[#68736a]">Sélectionner une date<input type={period === 'jour' ? 'date' : period === 'mois' ? 'month' : 'number'} min={period === 'année' ? '2020' : undefined} max={period === 'année' ? '2100' : undefined} value={period === 'année' ? date.slice(0, 4) : period === 'mois' ? date.slice(0, 7) : date} onChange={(event) => setDate(period === 'année' ? `${event.target.value}-01-01` : period === 'mois' ? `${event.target.value}-01` : event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-3 py-3 text-sm" /></label>}<div className="mt-6 rounded-2xl bg-[#e8f6eb] p-4"><p className="text-2xl font-black text-[#248b4a]">{filtered.length}</p><p className="mt-1 text-xs font-bold text-[#55745d]">commandes affichées</p></div></aside><section className="min-w-0">{selected ? <div><button onClick={() => onSelect('')} className="mb-4 text-xs font-black text-[#ff5a36]">← Retour à la liste</button><div className="grid gap-5 lg:grid-cols-[1fr_360px]"><article className="rounded-2xl bg-white p-6"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Commande</p><h3 className="mt-2 text-2xl font-black">{selected.id}</h3><p className="mt-1 text-xs text-[#7c887f]">{selected.date} · {selected.time} · {selected.channel}</p></div><span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-xs font-black text-[#27894a]">● {selected.status}</span></div><div className="mt-7"><p className="text-xs font-black uppercase tracking-widest text-[#89948b]">Transcription de la conversation</p><div className="mt-4 space-y-3">{selected.transcript.map(([speaker, text], index) => <div key={index} className={`rounded-2xl p-4 text-sm ${speaker === 'Client' ? 'bg-[#fff1e8]' : 'bg-[#eef5ef]'}`}><p className="mb-1 text-[10px] font-black uppercase tracking-widest text-[#89948b]">{speaker}</p>{text}</div>)}</div></div></article><aside className="rounded-2xl bg-[#0b1f14] p-6 text-white"><p className="text-xs font-black uppercase tracking-widest text-[#ffc647]">Détails opérationnels</p><div className="mt-6 space-y-4">{[['Montant total', selected.total], ['Temps de prise', selected.duration], ['Canal', selected.channel], ['Articles', String(selected.items.length)]].map(([label, value]) => <div key={label} className="flex justify-between border-b border-white/10 pb-3 text-sm"><span className="text-white/55">{label}</span><strong>{value}</strong></div>)}</div><p className="mt-7 text-xs font-black uppercase tracking-widest text-[#ffc647]">Commande client</p><ul className="mt-3 space-y-2 text-sm text-white/75">{selected.items.map((item) => <li key={item}>✓ {item}</li>)}</ul></aside></div></div> : <div className="overflow-hidden rounded-2xl bg-white"><div className="border-b border-[#edf0eb] px-5 py-4 text-xs font-black uppercase tracking-widest text-[#89948b]">Historique des commandes</div>{filtered.length ? <div className="divide-y divide-[#edf0eb]">{filtered.map((order) => <button key={order.id} onClick={() => onSelect(order.id)} className="grid w-full grid-cols-[1fr_1fr_1fr] items-center gap-3 px-5 py-5 text-left transition hover:bg-[#fafbf8] md:grid-cols-[1.2fr_1fr_1fr_1fr_1fr]"><span className="font-black">{order.id}</span><span className="text-xs text-[#7c887f]">{order.date} · {order.time}</span><span className="text-xs font-bold">{order.channel}</span><span className="font-black">{order.total}</span><span className="text-xs font-black text-[#27894a]">● {order.status}</span></button>)}</div> : <div className="p-12 text-center text-sm text-[#7b887f]">Aucune commande pour cette période.</div>}</div>}</section></div></div></div>;
-}
-
 function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise<void> }) {
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success'>('idle');
   const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
@@ -924,6 +899,8 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
   const [productsCount, setProductsCount] = useState<number | null>(null);
   const [orderTestState, setOrderTestState] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
   const [orderTestMessage, setOrderTestMessage] = useState('');
+  const [ordersSentCount, setOrdersSentCount] = useState<number>(0);
+  const [disconnecting, setDisconnecting] = useState(false);
   const restaurantId = demoRestaurantId;
 
   const loadStatus = useCallback(async () => {
@@ -1010,6 +987,35 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
     }
   };
 
+  const disconnectHubRise = async () => {
+    setDisconnecting(true);
+    setHubriseMessage('');
+    try {
+      const res = await fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-oauth?action=disconnect', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+        },
+        body: JSON.stringify({ restaurantId }),
+      });
+      if (res.ok) {
+        setHubriseState('idle');
+        setLastSync(null);
+        setProductsCount(null);
+        setOrdersSentCount(0);
+        setHubriseMessage('Connexion HubRise terminée.');
+      } else {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        setHubriseMessage(data.error ?? 'Impossible de se déconnecter.');
+      }
+    } catch (error) {
+      setHubriseMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
   const syncCatalog = async () => {
     setHubriseState('connecting');
     setHubriseMessage('');
@@ -1051,6 +1057,7 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Échec de l\'envoi');
       setOrderTestState('success');
       setOrderTestMessage(`Commande test envoyée : ${data.orderId ?? '—'}`);
+      setOrdersSentCount((count) => count + 1);
     } catch (error) {
       setOrderTestState('error');
       setOrderTestMessage(error instanceof Error ? error.message : String(error));
@@ -1059,7 +1066,7 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
 
   return (
     <div>
-      <SectionHeading eyebrow="Configuration technique" title="Connectez votre environnement restaurant" description="HubRise centralisera la liaison avec votre caisse, votre catalogue et vos flux de commande. Les identifiants restent protégés côté serveur." action={<button onClick={runTest} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">{testState === 'testing' ? 'Test en cours…' : testState === 'success' ? '✓ Connexion validée' : 'Tester le flux complet'}</button>} />
+      <SectionHeading eyebrow="Configuration caisse" title="Connectez votre environnement restaurant" description="HubRise centralisera la liaison avec votre caisse, votre catalogue et vos flux de commande. Les identifiants restent protégés côté serveur." action={<button onClick={runTest} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">{testState === 'testing' ? 'Test en cours…' : testState === 'success' ? '✓ Connexion validée' : 'Tester le flux complet'}</button>} />
       <section className={`${panelCard} mb-5 overflow-hidden border-[#d9e5dc]`}>
         <div className="flex flex-col gap-6 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-8">
           <div className="flex items-start gap-4">
@@ -1079,6 +1086,7 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
               <div className="flex flex-wrap gap-2">
                 <button onClick={syncCatalog} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657]">↻ Synchroniser le catalogue</button>
                 <button onClick={sendTestOrder} disabled={orderTestState === 'sending'} className="rounded-xl border border-white/30 bg-white/10 px-5 py-3 text-xs font-black text-white transition hover:bg-white/20 disabled:opacity-60">{orderTestState === 'sending' ? 'Envoi…' : 'Envoyer une commande test'}</button>
+                <button onClick={disconnectHubRise} disabled={disconnecting} className="rounded-xl border border-white/30 bg-white/10 px-5 py-3 text-xs font-black text-white transition hover:bg-[#e04d39]/80 disabled:opacity-60">{disconnecting ? 'Déconnexion…' : 'Déconnecter HubRise'}</button>
               </div>
             ) : (
               <button onClick={connectHubRise} disabled={hubriseState === 'connecting'} className="shrink-0 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white transition hover:bg-[#ff7657] disabled:opacity-60">{hubriseState === 'connecting' ? 'Connexion en cours…' : 'Connecter HubRise →'}</button>
@@ -1087,16 +1095,38 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
             {orderTestMessage && <p className={`max-w-xl text-xs font-semibold ${orderTestState === 'success' ? 'text-[#7ce3a1]' : 'text-[#ff927a]'}`}>{orderTestMessage}</p>}
           </div>
         </div>
-        <div className="flex flex-wrap gap-5 border-t border-[#e3ebe5] px-6 py-4 text-xs font-bold text-[#68776c] md:px-8"><span>✓ Caisse POS</span><span>✓ Catalogue en temps réel</span><span>✓ Commandes synchronisées</span><span>✓ Données chiffrées</span></div>
+        <div className="border-t border-[#e3ebe5] px-6 py-5 md:px-8">
+          <p className="mb-4 text-[10px] font-black uppercase tracking-[.18em] text-[#8a938c]">État de la connexion</p>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: 'Caisse POS', status: hubriseState === 'connected' ? 'active' : 'inactive', detail: hubriseState === 'connected' ? 'Connectée' : 'Non connectée' },
+              { label: 'Catalogue en temps réel', status: hubriseState === 'connected' && productsCount !== null ? 'active' : hubriseState === 'connected' ? 'pending' : 'inactive', detail: hubriseState === 'connected' ? (productsCount !== null ? `${productsCount} produits` : 'En attente') : 'Non synchronisé' },
+              { label: 'Commandes synchronisées', status: hubriseState === 'connected' ? 'active' : 'inactive', detail: hubriseState === 'connected' ? `${ordersSentCount} envoyées` : 'En attente' },
+              { label: 'Données chiffrées', status: 'active', detail: 'TLS 1.3 · AES-256' },
+            ].map((item) => (
+              <div key={item.label} className="flex items-start gap-3 rounded-xl bg-[#f7f8f5] p-4">
+                <span className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-black ${item.status === 'active' ? 'bg-[#e5f6e9] text-[#27894a]' : item.status === 'pending' ? 'bg-[#fff5d9] text-[#a86f00]' : 'bg-[#f0f2ef] text-[#7c887f]'}`}>
+                  {item.status === 'active' ? '✓' : item.status === 'pending' ? '◷' : '—'}
+                </span>
+                <div>
+                  <p className="text-xs font-black text-[#132018]">{item.label}</p>
+                  <p className={`mt-1 text-[10px] font-semibold ${item.status === 'active' ? 'text-[#27894a]' : item.status === 'pending' ? 'text-[#a86f00]' : 'text-[#7c887f]'}`}>{item.detail}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          {hubriseState === 'connected' && lastSync && (
+            <p className="mt-4 text-[10px] font-bold text-[#8a938c]">Dernière synchronisation : {new Date(lastSync).toLocaleString('fr-FR')}</p>
+          )}
+        </div>
       </section>
-      <section className={`${panelCard} p-6 md:p-7`}><div className="flex flex-wrap items-center justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Flux couverts</p><h2 className="mt-2 text-xl font-black">Une connexion pour vos commandes</h2><p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#778279]">DriveVoice prend la commande, la transmet à votre caisse via HubRise et suit la synchronisation du catalogue. Le paiement reste géré par votre restaurant.</p></div><span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-[10px] font-black text-[#27894a]">Commandes uniquement</span></div><div className="mt-6 grid gap-3 sm:grid-cols-3">{[['01','Connecter','Autorisez la caisse du restaurant'],['02','Synchroniser','Récupérez la carte HubRise'],['03','Transmettre','Envoyez chaque commande confirmée']].map(([number,title,detail])=><div key={number} className="rounded-2xl bg-[#f7f8f5] p-4"><span className="text-[10px] font-black text-[#ff5a36]">{number}</span><p className="mt-2 text-sm font-black">{title}</p><p className="mt-1 text-xs leading-relaxed text-[#7d877f]">{detail}</p></div>)}</div></section>
     </div>
   );
 }
 
 function AccountPanel() {
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteDraft, setInviteDraft] = useState({ fullName: '', email: '', role: 'Manager' });
+  const [inviteDraft, setInviteDraft] = useState({ fullName: '', email: '', role: 'Manager' as 'Directeur' | 'Manager' | 'Opérateur' });
   const [inviteNotice, setInviteNotice] = useState('');
   const [inviteSubmitting, setInviteSubmitting] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -1104,10 +1134,11 @@ function AccountPanel() {
   const [resetNotice, setResetNotice] = useState('');
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [members, setMembers] = useState([
-    { name: 'Alex Martin', access: 'Espace directeur', status: 'Administrateur' },
-    { name: 'Sophie Bernard', access: 'Espace manager', status: 'Actif' },
-    { name: 'Équipe restaurant', access: 'Espace franchisé', status: '12 membres' },
+    { name: 'Alex Martin', email: 'alex@restaurant.fr', access: 'Directeur', status: 'Actif' },
+    { name: 'Sophie Bernard', email: 'sophie@restaurant.fr', access: 'Manager', status: 'Actif' },
   ]);
+  const [resettingMember, setResettingMember] = useState<string | null>(null);
+  const [resetMemberNotice, setResetMemberNotice] = useState('');
 
   const openInvite = () => {
     setInviteDraft({ fullName: '', email: '', role: 'Manager' });
@@ -1143,9 +1174,9 @@ function AccountPanel() {
         setInviteNotice(result.error ?? 'Invitation impossible.');
         return;
       }
-      setMembers(current => [...current, { name: inviteDraft.fullName, access: `Espace ${inviteDraft.role.toLowerCase()}`, status: 'Invitation envoyée' }]);
+      setMembers(current => [...current, { name: inviteDraft.fullName, email: inviteDraft.email, access: inviteDraft.role, status: 'Invitation envoyée' }]);
       setInviteOpen(false);
-      setInviteDraft({ fullName: '', email: '', role: 'Manager' });
+      setInviteDraft({ fullName: '', email: '', role: 'Manager' as 'Directeur' | 'Manager' | 'Opérateur' });
     } catch {
       setInviteNotice('Impossible de contacter le service d’invitation.');
     } finally {
@@ -1172,15 +1203,42 @@ function AccountPanel() {
     const { error } = await supabase.auth.resetPasswordForEmail(resetEmail.trim(), {
       redirectTo: `${window.location.origin}/login?mode=reset`,
     });
-    setResetNotice(error ? error.message : 'Un lien de réinitialisation vient d’être envoyé. Consultez votre messagerie.');
+    setResetNotice(error ? error.message : "Un lien de réinitialisation vient d'être envoyé. Consultez votre messagerie.");
     setResetSubmitting(false);
+  };
+
+  const resetMemberPassword = async (memberEmail: string, memberName: string) => {
+    if (!memberEmail) {
+      setResetMemberNotice(`${memberName} n'a pas d'adresse e-mail associée.`);
+      return;
+    }
+    if (!supabase) {
+      setResetMemberNotice('La connexion Supabase n\'est pas disponible.');
+      return;
+    }
+    setResettingMember(memberName);
+    setResetMemberNotice('');
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(memberEmail, {
+        redirectTo: `${window.location.origin}/login?mode=reset`,
+      });
+      if (error) {
+        setResetMemberNotice(`Erreur : ${error.message}`);
+      } else {
+        setResetMemberNotice(`Lien de réinitialisation envoyé à ${memberEmail}`);
+      }
+    } catch {
+      setResetMemberNotice('Impossible d\'envoyer le lien de réinitialisation.');
+    } finally {
+      setResettingMember(null);
+    }
   };
 
   return (
     <div>
       <SectionHeading eyebrow="Espace restaurant" title="Mon compte" description="Gérez les droits d’accès et les membres de l’équipe de votre restaurant." />
-      <section className={`${panelCard} mt-5 p-6 md:p-7`}><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Droits d’accès</p><h2 className="mt-2 text-xl font-black">Équipe du restaurant</h2><p className="mt-1 text-sm text-[#7b857d]">Contrôlez ce que chaque profil peut consulter ou modifier.</p></div><button onClick={openInvite} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 py-3 text-xs font-black text-white transition hover:bg-[#173b27]">＋ Inviter un membre</button></div><div className="mt-6 overflow-x-auto rounded-2xl border border-[#e7ebe5]"><div className="min-w-[620px]"><div className="grid grid-cols-[1.3fr_1fr_1fr] bg-[#f7f8f5] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-[#8b948c]"><span>Profil</span><span>Accès</span><span>Statut</span></div>{members.map(member=><div key={`${member.name}-${member.access}`} className="grid grid-cols-[1.3fr_1fr_1fr] items-center border-t border-[#edf0eb] px-4 py-4 text-xs"><span className="font-black">{member.name}</span><span className="font-semibold text-[#68746b]">{member.access}</span><span className={`font-black ${member.status === 'Invitation envoyée' ? 'text-[#d98b14]' : 'text-[#2b9652]'}`}>● {member.status}</span></div>)}</div></div><div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-[#edf0eb] pt-5"><div><p className="text-sm font-black">Sécurité du compte</p><p className="mt-1 text-xs text-[#7b857d]">Recevez un lien sécurisé pour choisir un nouveau mot de passe.</p></div><button onClick={openPasswordReset} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-3 text-xs font-black transition hover:border-[#ff8f72] hover:text-[#d95032]">Réinitialiser le mot de passe</button></div></section>
-      {inviteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Inviter un membre"><div className="w-full max-w-lg rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">Nouvel accès</p><h2 className="mt-2 text-2xl font-black">Inviter un membre</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Un e-mail sécurisé sera envoyé pour créer son accès DriveVoice.</p></div><button onClick={() => setInviteOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={inviteMember} className="mt-7 space-y-4"><label className="block text-xs font-black text-[#68736a]">Nom complet<input required value={inviteDraft.fullName} onChange={event => setInviteDraft(current => ({ ...current, fullName: event.target.value }))} className={`${fieldClass} mt-2`} placeholder="Ex. Sophie Bernard" /></label><label className="block text-xs font-black text-[#68736a]">E-mail professionnel<input required type="email" value={inviteDraft.email} onChange={event => setInviteDraft(current => ({ ...current, email: event.target.value }))} className={`${fieldClass} mt-2`} placeholder="sophie@restaurant.fr" /></label><label className="block text-xs font-black text-[#68736a]">Rôle<select value={inviteDraft.role} onChange={event => setInviteDraft(current => ({ ...current, role: event.target.value }))} className={`${fieldClass} mt-2`}><option>Manager</option><option>Opérateur</option><option>Lecteur</option></select></label>{inviteNotice && <p role="status" className="rounded-xl bg-[#fff4e8] px-4 py-3 text-xs font-bold text-[#a35c16]">{inviteNotice}</p>}<div className="flex justify-end gap-3 pt-3"><button type="button" onClick={() => setInviteOpen(false)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Annuler</button><button disabled={inviteSubmitting} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50">{inviteSubmitting ? 'Envoi…' : 'Envoyer l’invitation'}</button></div></form></div></div>}
+      <section className={`${panelCard} mt-5 p-6 md:p-7`}><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Droits d’accès</p><h2 className="mt-2 text-xl font-black">Équipe du restaurant</h2><p className="mt-1 text-sm text-[#7b857d]">Contrôlez ce que chaque profil peut consulter ou modifier.</p></div><button onClick={openInvite} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 py-3 text-xs font-black text-white transition hover:bg-[#173b27]">＋ Inviter un membre</button></div>{resetMemberNotice && <div className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{resetMemberNotice}</div>}<div className="mt-6 overflow-x-auto rounded-2xl border border-[#e7ebe5]"><div className="min-w-[780px]"><div className="grid grid-cols-[1.3fr_1fr_1fr_auto] bg-[#f7f8f5] px-4 py-3 text-[10px] font-black uppercase tracking-widest text-[#8b948c]"><span>Profil</span><span>Accès</span><span>Statut</span><span className="text-right">Actions</span></div>{members.map(member=><div key={`${member.name}-${member.access}`} className="grid grid-cols-[1.3fr_1fr_1fr_auto] items-center border-t border-[#edf0eb] px-4 py-4 text-xs"><span className="font-black">{member.name}</span><span className="font-semibold text-[#68746b]">{member.access}</span><span className={`font-black ${member.status === 'Invitation envoyée' ? 'text-[#d98b14]' : 'text-[#2b9652]'}`}>● {member.status}</span><span className="text-right">{member.email ? <button onClick={() => resetMemberPassword(member.email, member.name)} disabled={resettingMember === member.name} className="rounded-lg border border-[#dfe4dc] bg-white px-3 py-2 text-[10px] font-black transition hover:border-[#ff8f72] hover:text-[#d95032] disabled:opacity-50">{resettingMember === member.name ? 'Envoi…' : 'Réinitialiser MDP'}</button> : <span className="text-[10px] text-[#8b948c]">—</span>}</span></div>)}</div></div></section>
+      {inviteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Inviter un membre"><div className="w-full max-w-lg rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">Nouvel accès</p><h2 className="mt-2 text-2xl font-black">Inviter un membre</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Un e-mail sécurisé sera envoyé pour créer son accès DriveVoice.</p></div><button onClick={() => setInviteOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={inviteMember} className="mt-7 space-y-4"><label className="block text-xs font-black text-[#68736a]">Nom complet<input required value={inviteDraft.fullName} onChange={event => setInviteDraft(current => ({ ...current, fullName: event.target.value }))} className={`${fieldClass} mt-2`} placeholder="Ex. Sophie Bernard" /></label><label className="block text-xs font-black text-[#68736a]">E-mail professionnel<input required type="email" value={inviteDraft.email} onChange={event => setInviteDraft(current => ({ ...current, email: event.target.value }))} className={`${fieldClass} mt-2`} placeholder="sophie@restaurant.fr" /></label><label className="block text-xs font-black text-[#68736a]">Rôle<select value={inviteDraft.role} onChange={event => setInviteDraft(current => ({ ...current, role: event.target.value as 'Directeur' | 'Manager' | 'Opérateur' }))} className={`${fieldClass} mt-2`}><option>Directeur</option><option>Manager</option><option>Opérateur</option></select></label>{inviteNotice && <p role="status" className="rounded-xl bg-[#fff4e8] px-4 py-3 text-xs font-bold text-[#a35c16]">{inviteNotice}</p>}<div className="flex justify-end gap-3 pt-3"><button type="button" onClick={() => setInviteOpen(false)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Annuler</button><button disabled={inviteSubmitting} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50">{inviteSubmitting ? 'Envoi…' : 'Envoyer l’invitation'}</button></div></form></div></div>}
       {resetOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Réinitialiser le mot de passe"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">Sécurité du compte</p><h2 className="mt-2 text-2xl font-black">Réinitialiser le mot de passe</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Nous vous enverrons un lien sécurisé valable pour votre compte.</p></div><button onClick={() => setResetOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={requestPasswordReset} className="mt-7"><label className="block text-xs font-black text-[#68736a]">E-mail du compte<input required type="email" value={resetEmail} onChange={event => setResetEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="vous@restaurant.fr" /></label>{resetNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{resetNotice}</p>}<div className="mt-6 flex justify-end gap-3"><button type="button" onClick={() => setResetOpen(false)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Fermer</button><button disabled={resetSubmitting} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:cursor-not-allowed disabled:opacity-50">{resetSubmitting ? 'Envoi…' : 'Envoyer le lien'}</button></div></form></div></div>}
     </div>
   );
@@ -1211,7 +1269,7 @@ function CatalogPanel({ products, setProducts }: { products: CatalogProduct[]; s
   return (
     <div>
       <SectionHeading eyebrow="Carte restaurant" title="Catalogue HubRise" description="Consultez la carte importée depuis la caisse de cet établissement. Les produits, prix et disponibilités sont synchronisés avec HubRise en temps réel." action={<div className="flex flex-wrap gap-2"><button onClick={refresh} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-3 text-xs font-black">{syncState === 'refreshing' ? 'Synchronisation…' : '↻ Actualiser'}</button><span className="flex items-center gap-2 rounded-xl bg-[#e5f6e9] px-4 py-3 text-xs font-black text-[#27894a]"><span className="h-2 w-2 rounded-full bg-[#35a85a]" />Synchronisé en direct</span></div>} />
-      <section className={`${panelCard} mb-5 overflow-hidden`}><div className="flex flex-col gap-5 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-7"><div className="flex items-start gap-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black">H</span><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Source de vérité</p><h2 className="mt-1 text-xl font-black">Carte du restaurant · HubRise</h2><p className="mt-2 text-sm text-white/60">Dernière synchronisation il y a quelques secondes · Les modifications de la caisse seront répercutées automatiquement.</p></div></div><div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-right"><p className="text-[10px] font-bold uppercase tracking-widest text-white/45">Établissement</p><p className="mt-1 text-sm font-black">BK Paris République</p></div></div><div className="flex flex-wrap gap-5 border-t border-[#dce9df] px-6 py-4 text-xs font-bold text-[#68776c] md:px-7"><span>✓ Catalogue importé</span><span>✓ Prix synchronisés</span><span>✓ Disponibilités en direct</span><span>✓ Utilisé par l’agent IA</span></div></section>
+      <section className={`${panelCard} mb-5 overflow-hidden`}><div className="flex flex-col gap-5 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-7"><div className="flex items-start gap-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black">H</span><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Source de vérité</p><h2 className="mt-1 text-xl font-black">Carte du restaurant · HubRise</h2><p className="mt-2 text-sm text-white/60">Dernière synchronisation il y a quelques secondes · Les modifications de la caisse seront répercutées automatiquement.</p></div></div><div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-right"><p className="text-[10px] font-bold uppercase tracking-widest text-white/45">Établissement</p><p className="mt-1 text-sm font-black">{demoRestaurantName}</p></div></div><div className="flex flex-wrap gap-5 border-t border-[#dce9df] px-6 py-4 text-xs font-bold text-[#68776c] md:px-7"><span>✓ Catalogue importé</span><span>✓ Prix synchronisés</span><span>✓ Disponibilités en direct</span><span>✓ Utilisé par l’agent IA</span></div></section>
       <section className={`${panelCard} overflow-hidden`}><div className="flex flex-col gap-4 border-b border-[#e7ebe5] p-5 md:flex-row md:items-center md:justify-between"><div className="flex items-center gap-3"><input aria-label="Rechercher dans le catalogue HubRise" className={`${fieldClass} md:w-80`} placeholder="Rechercher dans le catalogue HubRise…" value={query} onChange={event=>setQuery(event.target.value)} /><span className="rounded-full bg-[#eef2ed] px-3 py-2 text-xs font-black">{products.length} produits</span></div><div className="flex gap-2 text-xs"><span className="rounded-full bg-[#e5f6e9] px-3 py-2 font-black text-[#28894a]">{products.filter(p=>p.available).length} disponibles</span><span className="rounded-full bg-[#f3f4f1] px-3 py-2 font-black text-[#737d75]">{products.filter(p=>!p.available).length} masqués</span></div></div>
         <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-left"><thead className="bg-[#f8f9f6] text-[10px] font-black uppercase tracking-[.14em] text-[#8f9790]"><tr>{['Produit','Catégorie HubRise','Prix TTC','Configuration','Disponibilité'].map(label=><th key={label} className="px-5 py-3">{label}</th>)}</tr></thead><tbody>{filtered.map(product=><tr key={product.id} onClick={() => { setSelectedProduct(product); setSelectedOptions({}); }} className="cursor-pointer border-t border-[#edf0eb] transition hover:bg-[#fbfcfa]"><td className="px-5 py-4"><button onClick={event => { event.stopPropagation(); setSelectedProduct(product); setSelectedOptions({}); }} className="w-full min-w-48 text-left font-black hover:text-[#ff5a36]">{product.name}</button></td><td className="px-5 py-4"><span className="rounded-lg bg-[#f3f5f1] px-3 py-2 text-xs font-bold">{product.category}</span></td><td className="px-5 py-4"><div className="flex items-center gap-1"><input onClick={event => event.stopPropagation()} aria-label={`Prix de ${product.name}`} className="w-20 rounded-lg border border-[#e0e4de] px-3 py-2 text-sm font-black" type="number" step="0.1" value={product.price} onChange={event=>updateProduct(product.id,{price:Number(event.target.value)})} /><span className="font-black">€</span></div></td><td className="px-5 py-4 text-xs font-semibold text-[#69756c]">{product.optionGroups?.length ? `${product.optionGroups.length} groupe${product.optionGroups.length > 1 ? 's' : ''} de choix · Voir les détails` : 'Produit simple · Voir les détails'}</td><td className="px-5 py-4"><button onClick={event=>{ event.stopPropagation(); updateProduct(product.id,{available:!product.available}); }} className={`flex items-center gap-2 rounded-full px-3 py-2 text-xs font-black ${product.available?'bg-[#e3f6e8] text-[#258848]':'bg-[#eff1ee] text-[#7f8880]'}`}><span className={`h-2 w-2 rounded-full ${product.available?'bg-[#34a759]':'bg-[#a6ada7]'}`} />{product.available?'Disponible':'Masqué'}</button></td></tr>)}</tbody></table></div>
       </section>
@@ -1955,23 +2013,33 @@ function AgentPanel({ welcome, setWelcome }: { welcome: string; setWelcome: Reac
 }
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('order');
+  const searchParams = useSearchParams();
+  const isBurgerKingDemo = searchParams.get('restaurant') === 'bk-loire';
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => searchParams.get('tab') === 'catalog' ? 'catalog' : 'order');
+  const [userRole, setUserRole] = useState<UserRole>('directeur');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [enterpriseCatalog, setEnterpriseCatalog] = useState<CatalogProduct[]>([]);
-  const [agentWelcome, setAgentWelcome] = useState("Bonjour et bienvenue chez Burger King Paris République. Que puis-je préparer pour vous aujourd'hui ?");
+  const [agentWelcome, setAgentWelcome] = useState(isBurgerKingDemo ? "Bonjour et bienvenue chez Burger King Loire. Que puis-je préparer pour vous aujourd'hui ?" : "Bonjour et bienvenue à La Piazza République. Que puis-je préparer pour vous aujourd'hui ?");
   const [agentRules, setAgentRules] = useState<Array<[string, boolean]>>(initialAgentRules);
+  const restaurantName = isBurgerKingDemo ? 'Burger King Loire' : demoRestaurantName;
+  const restaurantId = isBurgerKingDemo ? burgerKingDemoRestaurantId : demoRestaurantId;
   const [authOpen, setAuthOpen] = useState(false);
   const [accountEmail, setAccountEmail] = useState('');
   const [authNotice, setAuthNotice] = useState('');
   const reloadRestaurantCatalog = useCallback(async () => {
+    if (isBurgerKingDemo) {
+      setEnterpriseCatalog(initialCatalog.map(product => ({ ...product })));
+      return;
+    }
     setEnterpriseCatalog([]);
     const rows = await fetchRestaurantProducts(demoRestaurantId);
     if (rows) setEnterpriseCatalog(rows.map(mapRestaurantProduct));
-  }, []);
+  }, [isBurgerKingDemo]);
   useEffect(() => {
     const timer = window.setTimeout(() => void reloadRestaurantCatalog(), 0);
     return () => window.clearTimeout(timer);
   }, [reloadRestaurantCatalog]);
+  const visibleCatalog = enterpriseCatalog.length > 0 ? enterpriseCatalog : isBurgerKingDemo ? initialCatalog : enterpriseCatalog;
   const active = workspaceTabs.find(tab => tab.id === activeTab) ?? workspaceTabs[0];
   const openAccount = () => {
     setAuthOpen(true);
@@ -1994,12 +2062,12 @@ export default function Home() {
     <div className={`min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid ${sidebarCollapsed ? 'lg:grid-cols-[88px_1fr]' : 'lg:grid-cols-[268px_1fr]'}`}>
       <aside className="drivevoice-sidebar relative flex flex-col border-b border-[#223a2c] bg-[#0b1f14] pb-4 text-white shadow-[12px_0_40px_rgba(7,26,17,.08)] lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:min-h-0 lg:overflow-hidden lg:border-b-0 lg:border-r lg:pb-0">
         <div className={`flex items-center justify-between px-5 py-5 lg:px-5 lg:py-7 ${sidebarCollapsed ? 'lg:flex-col lg:gap-5' : 'lg:block'}`}><div className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black shadow-[0_8px_24px_rgba(255,90,54,.22)]">D</span><div className={sidebarCollapsed ? 'lg:hidden' : ''}><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></div><div className="flex items-center gap-2"><span className={`rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a] ${sidebarCollapsed ? 'lg:hidden' : ''}`}>● Live</span><button onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} className="hidden h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-sm font-black transition hover:bg-white/10 lg:grid" aria-label={sidebarCollapsed ? 'Développer la barre latérale' : 'Réduire la barre latérale'}>{sidebarCollapsed ? '→' : '←'}</button></div></div>
-        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? 'BK' : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>BK Paris République</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>Drive n°04 · Voie A</p></div></div>
-        <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:min-h-0 lg:flex-1 lg:block lg:space-y-1 lg:overflow-y-auto lg:overscroll-contain ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
+        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? (isBurgerKingDemo ? 'BK' : 'LP') : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>{restaurantName}</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>{isBurgerKingDemo ? 'Catalogue BK France · Démo' : 'Drive n°04 · Voie A'}</p></div></div>
+        <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:min-h-0 lg:flex-1 lg:block lg:space-y-1 lg:overflow-y-auto lg:overscroll-contain ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.filter(tab => userRole === 'directeur' || (userRole === 'manager' && !restrictedTabsForManager.includes(tab.id)) || (userRole === 'operateur' && !restrictedTabsForOperateur.includes(tab.id))).map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
         <div className={`hidden border-t border-white/10 pt-4 lg:mx-4 lg:mb-5 lg:block lg:shrink-0 ${sidebarCollapsed ? 'lg:mx-3' : ''}`}><button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className="w-full rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36]"><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button></div>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
-        {activeTab === 'order' ? <OrderWorkspace products={enterpriseCatalog} agentWelcome={agentWelcome} agentRules={agentRules} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <DashboardPanel />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <CatalogPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}
+        {activeTab === 'order' ? <OrderWorkspace products={visibleCatalog} agentWelcome={agentWelcome} agentRules={agentRules} restaurantName={restaurantName} restaurantId={restaurantId} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <RestaurantDashboardPanel restaurantId={restaurantId} />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && (isBurgerKingDemo ? <RestaurantMenuBuilderPanel products={visibleCatalog} setProducts={setEnterpriseCatalog} /> : <CatalogPanel products={enterpriseCatalog} setProducts={setEnterpriseCatalog} />)}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}
       </main>
       {authOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Créer un compte restaurant"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice restaurants</p><h2 className="mt-2 text-2xl font-black">Créer votre compte</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Recevez un lien sécurisé pour accéder à votre espace restaurant.</p></div><button onClick={() => setAuthOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={createRestaurantAccount} className="mt-7"><label className="text-xs font-black text-[#68736a]">Adresse e-mail professionnelle<input required type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="restaurant@exemple.fr" /></label><button disabled={!isSupabaseConfigured} className="mt-4 w-full rounded-xl bg-[#ff5a36] py-3.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">Recevoir mon lien d’accès</button>{!isSupabaseConfigured && <p className="mt-3 text-xs text-[#b26b00]">L’authentification sera disponible après configuration Supabase.</p>}{authNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{authNotice}</p>}</form><p className="mt-6 text-center text-[10px] text-[#98a099]">Connexion sans mot de passe · lien à usage unique</p></div></div>}
     </div>

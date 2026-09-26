@@ -62,35 +62,19 @@ STYLE VOCAL
 - Accepte immédiatement que le client t'interrompe et écoute sa correction.`,
     audio: {
       input: {
-        transcription: {
-          model: 'gpt-live-transcribe',
-          languages: ['fr'],
-          delay: 'low',
-          keywords: [
-            'DriveVoice',
-            'Master des Chefs',
-            'Master Sarran Mozzarella',
-            'Master Pairet Poivre',
-            'Chicken Louisiane',
-            'Coca-Cola',
-            'frites',
-            'menu',
-          ],
-          prompt: 'Commande de restauration rapide en français : burger, menu, tenders, frites, cola zéro.',
-        },
         noise_reduction: { type: 'near_field' },
         turn_detection: {
           type: 'server_vad',
           threshold: 0.45,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 550,
+          prefix_padding_ms: 400,
+          silence_duration_ms: 650,
           create_response: true,
           interrupt_response: true,
         },
       },
       output: {
         voice: 'marin',
-        speed: 1.04,
+        speed: 1.1,
       },
     },
     tools: buildRealtimeToolDefinitions(),

@@ -76,6 +76,9 @@ Après chaque ajout, appelle update_order avec le panier complet.`,
 };
 
 let turn = 0;
+let toolContinuationPending = false;
+let responseDoneWaitingForTool = false;
+let toolOutputSent = false;
 const log = (label, obj) => console.log(`\n=== ${label} ===\n${JSON.stringify(obj, null, 2)}`);
 
 ws.on('open', () => {
@@ -99,16 +102,32 @@ ws.on('message', (raw) => {
 
   if (evt.type === 'response.function_call_arguments.done') {
     // Simule le backend qui répond après un court délai
+    toolContinuationPending = true;
+    toolOutputSent = false;
     setTimeout(() => {
       ws.send(JSON.stringify({
         type: 'conversation.item.create',
         item: { type: 'function_call_output', call_id: evt.call_id, output: JSON.stringify({ success: true, data: { items: [{ productId: 'signature_menu', quantity: 1, price: 12.9 }], total: 12.9, status: 'editing' } }) },
       }));
-      ws.send(JSON.stringify({ type: 'response.create', response: { output_modalities: ['audio'] } }));
+      toolOutputSent = true;
+      if (responseDoneWaitingForTool) {
+        responseDoneWaitingForTool = false;
+        toolContinuationPending = false;
+        ws.send(JSON.stringify({ type: 'response.create', response: { output_modalities: ['audio'] } }));
+      }
     }, 300);
   }
 
   if (evt.type === 'response.done' && turn === 1) {
+    if (toolContinuationPending) {
+      if (toolOutputSent) {
+        toolContinuationPending = false;
+        ws.send(JSON.stringify({ type: 'response.create', response: { output_modalities: ['audio'] } }));
+      } else {
+        responseDoneWaitingForTool = true;
+      }
+      return;
+    }
     turn = 2;
     setTimeout(() => {
       ws.send(JSON.stringify({

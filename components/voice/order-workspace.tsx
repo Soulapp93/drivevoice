@@ -6,6 +6,7 @@ import { supabaseAnonKey } from '@/lib/supabase/client';
 
 const money = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR' });
 const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+const demoRestaurantName = 'La Piazza République';
 
 type ProductId = string;
 
@@ -31,35 +32,41 @@ type BasketItem = {
   customizations?: string[];
 };
 
-export function OrderWorkspace({ products, agentWelcome }: { products: CatalogProduct[]; agentWelcome: string; agentRules: Array<[string, boolean]> }) {
+export function OrderWorkspace({ products, agentWelcome, restaurantName = demoRestaurantName, restaurantId = demoRestaurantId }: { products: CatalogProduct[]; agentWelcome: string; agentRules: Array<[string, boolean]>; restaurantName?: string; restaurantId?: string }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const catalog = useMemo(
     () => products.map((product) => ({ productId: product.productId, name: product.name, price: product.price })),
     [products],
   );
-  const { status, transcript, basket, isStarted, start, sendText, confirmOrder, orderResult, resetForNextCustomer } = useVoice({
-    brand: 'Burger King',
-    restaurantId: demoRestaurantId,
+  const { status, basket, isStarted, start, sendText, interrupt, orderResult, resetForNextCustomer } = useVoice({
+    brand: restaurantName,
+    restaurantId,
     catalog,
   });
 
   const [pricing, setPricing] = useState<{ acceptingOrders: boolean; discountTotal: number; total: number } | null>(null);
-  const [confirmRequestedAt, setConfirmRequestedAt] = useState<number | null>(null);
-  const resetTimerRef = useRef<number | null>(null);
+  const [countdown, setCountdown] = useState<number>(10);
 
   const confirmed = orderResult?.status === 'submitted';
-  const submitting = confirmRequestedAt !== null && orderResult === null;
 
   useEffect(() => {
-    if (orderResult?.status !== 'submitted') return;
-    resetTimerRef.current = window.setTimeout(() => {
-      setConfirmRequestedAt(null);
-      resetForNextCustomer();
-    }, 10_000);
-    return () => {
-      if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
-    };
-  }, [orderResult, resetForNextCustomer]);
+    if (orderResult?.status !== 'submitted') {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          window.clearInterval(interval);
+          resetForNextCustomer();
+          return 10;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [orderResult?.status, resetForNextCustomer]);
 
   const total = useMemo(() => basket.total, [basket.total]);
 
@@ -68,7 +75,7 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
       void fetch('https://pfnwodwpefugpcynykga.supabase.co/functions/v1/hubrise-pricing', {
         method: 'POST',
         headers: { 'content-type': 'application/json', Authorization: `Bearer ${supabaseAnonKey}` },
-        body: JSON.stringify({ restaurantId: demoRestaurantId, subtotal: total }),
+        body: JSON.stringify({ restaurantId, subtotal: total }),
       })
         .then(async (response) => {
           const result = (await response.json().catch(() => ({}))) as { acceptingOrders?: boolean; discountTotal?: number; total?: number };
@@ -77,7 +84,7 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
         .catch(() => setPricing(null));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [total]);
+  }, [restaurantId, total]);
 
   const finalTotal = pricing?.total ?? total;
 
@@ -97,28 +104,35 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
   const mappedItems = useMemo(() => {
     return (basket.items as BasketItem[]).flatMap((item) => {
       const product = products.find((entry) => entry.productId === item.productId);
-      if (!product) return [];
+      const name = item.name || product?.name || item.productId;
+      const price = typeof item.price === 'number' ? item.price : product?.price ?? 0;
+      const detail = product?.detail ?? '';
+      const emoji = product?.emoji ?? '🍽️';
+
       return Array.from({ length: item.quantity }, (_, index) => ({
-        ...product,
         id: `${item.productId}-${index}`,
+        productId: item.productId,
+        name,
+        detail,
+        price,
+        emoji,
+        available: product?.available ?? true,
+        category: product?.category ?? 'Articles',
+        posCode: product?.posCode ?? item.productId,
         customizations: item.customizations ?? [],
       }));
     });
   }, [basket.items, products]);
 
-  const lastAgentText = transcript.filter((message) => message.speaker === 'agent').at(-1)?.text ?? agentWelcome;
-  const lastClientText = transcript.filter((message) => message.speaker === 'client').at(-1)?.text ?? '';
-
-  const handleConfirm = () => {
-    if (submitting || confirmed) return;
-    setConfirmRequestedAt(Date.now());
-    confirmOrder();
-  };
-
   const handleRestart = () => {
-    setConfirmRequestedAt(null);
+    setCountdown(10);
     resetForNextCustomer();
     void start(audioRef.current ?? undefined);
+  };
+
+  const handleCancel = () => {
+    setCountdown(10);
+    resetForNextCustomer();
   };
 
   const handleRemove = (name: string) => {
@@ -133,7 +147,7 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
           <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#0b1f14] text-lg font-black text-white">D</span>
           <div>
             <p className="text-lg font-black tracking-[-0.04em]">DRIVE<span className="text-[#ff5a36]">VOICE</span></p>
-            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#6b766e]">Assistant de commande</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#6b766e]">{restaurantName} · Assistant de commande</p>
           </div>
         </div>
         <div className="flex items-center gap-2 rounded-full border border-[#dce1d8] bg-white px-4 py-2 text-xs font-bold">
@@ -141,7 +155,7 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-[1540px] gap-5 px-5 pb-8 md:px-10 xl:grid-cols-[1.2fr_1fr]">
+      <section className={`mx-auto grid max-w-[1540px] gap-5 px-5 pb-8 md:px-10 ${isStarted ? 'xl:grid-cols-[1.2fr_1fr]' : 'grid-cols-1'}`}>
         <div className="relative flex min-h-[720px] flex-col overflow-hidden rounded-[32px] bg-[#0b1f14] p-7 text-white md:p-11">
           <div className="pointer-events-none absolute -right-24 -top-28 h-80 w-80 rounded-full bg-[#ff5a36]" />
           <div className="pointer-events-none absolute right-28 top-20 h-24 w-24 rounded-full bg-[#ffc647]" />
@@ -161,12 +175,17 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
               <p className="mt-7 max-w-xl text-base font-semibold leading-relaxed text-white/70 md:text-lg">
                 Veuillez cliquer sur le bouton « Passer ma commande » pour commencer votre commande.
               </p>
+              {status.error ? (
+                <div role="alert" className="mt-6 max-w-xl rounded-2xl border border-[#ffc647]/30 bg-[#ffc647]/10 px-4 py-3 text-sm font-semibold text-[#ffe099]">
+                  {status.error}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="relative z-10 my-auto py-8">
               <div className="mb-8 flex items-center gap-5">
                 <button
-                  onClick={() => sendText(lastClientText || 'Je voudrais ajouter quelque chose.')}
+                  onClick={interrupt}
                   disabled={status.connection !== 'connected'}
                   aria-label="Interrompre l’agent et parler"
                   className={`voice-orb grid h-24 w-24 shrink-0 place-items-center rounded-full border-[10px] text-3xl shadow-2xl transition md:h-32 md:w-32 ${listening ? 'border-[#ffc647]/25 bg-[#ffc647] text-[#142018]' : speaking ? 'border-[#ff5a36]/25 bg-[#ff5a36]' : 'border-white/10 bg-white/10'} disabled:cursor-not-allowed disabled:opacity-50`}
@@ -196,38 +215,10 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
                   </span>
                   <div>
                     <p className="text-xl font-bold leading-snug md:text-3xl">{listening ? 'Le client parle' : speaking ? 'DriveVoice vous répond' : 'Conversation vocale active'}</p>
-                    <p className="mt-2 text-sm text-white/50">{lastAgentText}</p>
+                    <p className="mt-2 text-sm text-white/50">{speaking ? 'Je traite votre demande…' : listening ? 'Je vous écoute…' : agentWelcome}</p>
                   </div>
                 </div>
               </div>
-
-              <section className="mt-5 max-w-3xl rounded-[24px] border border-white/10 bg-black/15 p-5 backdrop-blur" aria-label="Transcription de la conversation">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">État de la conversation</p>
-                    <h2 className="mt-1 text-lg font-black">Prise de parole en direct</h2>
-                  </div>
-                  <span className="rounded-full bg-white/10 px-3 py-1 text-[10px] font-black text-white/60">Transcription masquée</span>
-                </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className={`rounded-2xl border p-4 ${listening ? 'border-[#ffc647]/70 bg-[#ffc647]/15' : 'border-white/10 bg-white/5'}`}>
-                    <div className="flex items-center justify-between">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-[#ffc647]">Client</p>
-                      <span className={`h-2.5 w-2.5 rounded-full ${listening ? 'animate-pulse bg-[#ffc647]' : 'bg-white/25'}`} />
-                    </div>
-                    <p className="mt-3 text-sm font-black">{lastClientText || (listening ? 'Le client parle' : 'En attente du client')}</p>
-                    <p className="mt-1 text-[10px] text-white/45">{listening ? 'Parole détectée en direct' : 'Le prochain tour de parole sera affiché ici'}</p>
-                  </div>
-                  <div className={`rounded-2xl border p-4 ${speaking ? 'border-[#ff5a36]/70 bg-[#ff5a36]/15' : 'border-white/10 bg-white/5'}`}>
-                    <div className="flex items-center justify-between">
-                      <p className="text-[10px] font-black uppercase tracking-widest text-[#ff927a]">DriveVoice IA</p>
-                      <span className={`h-2.5 w-2.5 rounded-full ${speaking ? 'animate-pulse bg-[#ff5a36]' : 'bg-white/25'}`} />
-                    </div>
-                    <p className="mt-3 text-sm font-black">{lastAgentText || (speaking ? 'L’agent parle' : 'En attente de l’agent')}</p>
-                    <p className="mt-1 text-[10px] text-white/45">{speaking ? 'Réponse vocale en direct' : 'La réponse apparaîtra après le client'}</p>
-                  </div>
-                </div>
-              </section>
 
               {status.error && (
                 <p role="alert" className="mt-4 max-w-3xl rounded-2xl border border-[#ffc647]/30 bg-[#ffc647]/10 px-4 py-3 text-sm text-[#ffe099]">
@@ -252,15 +243,19 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
           ) : (
             <div className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-t border-white/10 pt-5">
               <p className="text-xs text-white/45">Vous pouvez parler par-dessus l’agent ou toucher le cercle pour l’interrompre.</p>
-              <button onClick={handleRestart} className="text-xs font-bold text-white/60 underline decoration-white/20 underline-offset-4">Recommencer</button>
+              <div className="flex items-center gap-4">
+                <button onClick={handleRestart} className="text-xs font-bold text-white/60 underline decoration-white/20 underline-offset-4">Recommencer</button>
+                <button onClick={handleCancel} className="rounded-xl border border-[#ff927a]/40 px-3 py-2 text-xs font-black text-[#ffb09c] transition hover:border-[#ff927a] hover:bg-[#ff5a36]/15">Annuler la commande</button>
+              </div>
             </div>
           )}
         </div>
 
-        <aside className="flex min-h-[720px] flex-col rounded-[32px] bg-white p-8 shadow-sm md:p-10 xl:sticky xl:top-24 xl:h-fit">
+        {isStarted && (
+          <aside className="flex min-h-[720px] flex-col rounded-[32px] bg-white p-8 shadow-sm md:p-10 xl:sticky xl:top-24 xl:h-fit">
           <div className="flex items-center justify-between border-b border-[#e7eae4] pb-7">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[.18em] text-[#899189]">Commande · BK</p>
+              <p className="text-xs font-bold uppercase tracking-[.18em] text-[#899189]">Commande · {restaurantName}</p>
               <h2 className="mt-1 text-2xl font-black tracking-[-0.04em]">Votre panier</h2>
             </div>
             <span className="rounded-full bg-[#f1f3ee] px-3 py-1.5 text-xs font-bold">{mappedItems.length} article{mappedItems.length !== 1 ? 's' : ''}</span>
@@ -272,10 +267,20 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
                 <div className="mx-auto mb-5 grid h-24 w-24 place-items-center rounded-full bg-[#dff6e5] text-4xl">✓</div>
                 <p className="text-xs font-bold uppercase tracking-[.18em] text-[#38a55f]">Commande confirmée</p>
                 {orderResult?.ref ? <p className="mt-2 text-7xl font-black tracking-[-.08em]">{orderResult.ref}</p> : null}
+                <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-[#edf6ef] px-4 py-1.5 text-xs font-bold text-[#2a8747]">
+                  <span className="h-2 w-2 rounded-full animate-pulse bg-[#35a85a]" />
+                  Réinitialisation automatique dans {countdown}s
+                </div>
                 <p className="mt-4 max-w-xs text-sm leading-relaxed text-[#758077]">Avancez jusqu’à la prochaine fenêtre. Votre commande a été transmise en cuisine.</p>
                 {orderResult?.status === 'failed' && orderResult.message ? (
                   <p className="mt-3 text-xs font-bold text-[#bd5d3d]">{orderResult.message}</p>
                 ) : null}
+                <button
+                  onClick={resetForNextCustomer}
+                  className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#0b1f14] px-5 py-2.5 text-xs font-black text-white transition hover:bg-[#153623]"
+                >
+                  Client suivant →
+                </button>
               </div>
             </div>
           ) : mappedItems.length ? (
@@ -313,22 +318,15 @@ export function OrderWorkspace({ products, agentWelcome }: { products: CatalogPr
               </div>
               <strong className="text-4xl font-black tracking-[-0.05em]">{money.format(finalTotal)}</strong>
             </div>
-            <button
-              disabled={!mappedItems.length || confirmed || submitting || status.connection !== 'connected' || pricing?.acceptingOrders === false}
-              onClick={handleConfirm}
-              className="mt-6 flex h-14 w-full items-center justify-between rounded-2xl bg-[#0b1f14] px-5 font-black text-white transition enabled:hover:bg-[#153623] disabled:cursor-not-allowed disabled:bg-[#edf0ea] disabled:text-[#aeb5ad]"
-            >
-              <span>{confirmed ? 'Commande transmise' : submitting ? 'Transmission au restaurant…' : pricing?.acceptingOrders === false ? 'Commandes fermées' : 'Confirmer la commande'}</span>
-              <span>→</span>
-            </button>
             {orderResult?.status === 'failed' && !confirmed ? (
               <p className="mt-3 text-center text-[11px] font-bold text-[#bd5d3d]">
                 {orderResult.message ?? "La commande n'a pas pu être transmise. Réessayez ou appelez un équipier."}
               </p>
             ) : null}
-            <p className="mt-4 text-center text-[11px] text-[#9aa19a]">Paiement à la prochaine fenêtre · Conversation traitée en temps réel</p>
+            <p className="mt-4 text-center text-[11px] text-[#9aa19a]">Paiement à la prochaine fenêtre · Dites &laquo; c&apos;est tout &raquo; pour envoyer la commande</p>
           </div>
-        </aside>
+          </aside>
+        )}
       </section>
     </main>
   );

@@ -487,13 +487,13 @@ export function buildRealtimeToolDefinitions(productIds: string[] = []) {
     {
       type: 'function',
       name: 'get_basket',
-      description: 'Récupère le panier officiel après une reconnexion ou à la demande du client.',
+      description: 'Récupère le panier officiel pour faire un récapitulatif ou vérifier l’état.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
     {
       type: 'function',
       name: 'submit_order',
-      description: 'Transmet une seule fois au restaurant une commande explicitement confirmée par le client.',
+      description: 'Transmet au restaurant une commande explicitement confirmée par le client. À appeler UNIQUEMENT après un récapitulatif et une confirmation claire ("oui", "je confirme").',
       parameters: {
         type: 'object',
         properties: { confirmation: { type: 'string', enum: ['explicit'] } },

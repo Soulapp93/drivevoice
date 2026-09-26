@@ -12,15 +12,17 @@ export type ConversationState =
   | 'error';
 
 type SendEvent = (event: object) => boolean;
+const DEFAULT_RESPONSE = { output_modalities: ['audio'] };
 
 type QueuedAction =
-  | { kind: 'response.create'; response?: object }
-  | { kind: 'tool.output'; callId: string; output: string };
+  | { kind: 'response.create'; response?: object; priority: number }
+  | { kind: 'tool.output'; callId: string; output: string; priority: number };
+
+export type ResponseLifecycle = 'idle' | 'creating' | 'active' | 'completing';
 
 export class ConversationMachine {
   private state: ConversationState = 'idle';
-  private activeResponse = false;
-  private responseCreatePending = false;
+  private responseLifecycle: ResponseLifecycle = 'idle';
   private toolCallsRunning = 0;
   private queue: QueuedAction[] = [];
   private responseId: string | null = null;
@@ -31,7 +33,7 @@ export class ConversationMachine {
   }
 
   get isResponseActive() {
-    return this.activeResponse || this.responseCreatePending;
+    return this.responseLifecycle !== 'idle';
   }
 
   get activeResponseId() {
@@ -40,6 +42,10 @@ export class ConversationMachine {
 
   get hasRunningTool() {
     return this.toolCallsRunning > 0;
+  }
+
+  get lifecycle() {
+    return this.responseLifecycle;
   }
 
   setState(state: ConversationState) {
@@ -57,12 +63,9 @@ export class ConversationMachine {
   sendUserMessage(send: SendEvent, message: string) {
     this.lastUserMessageQueuedAt = Date.now();
     if (this.isResponseActive || this.hasRunningTool) {
-      if (this.activeResponse || this.responseCreatePending) {
-        send({ type: 'response.cancel' });
+      if (this.responseLifecycle === 'active') {
+        this.cancelActiveResponse(send);
       }
-      this.activeResponse = false;
-      this.responseCreatePending = false;
-      this.responseId = null;
       this.queue = this.queue.filter((action) => action.kind !== 'response.create');
       this.state = 'interrupted';
     }
@@ -71,25 +74,40 @@ export class ConversationMachine {
       type: 'conversation.item.create',
       item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: message }] },
     });
-    this.requestResponse(send);
+    this.requestResponse(send, undefined, 0);
   }
 
-  requestResponse(send: SendEvent, response?: object): boolean {
-    if (this.isResponseActive || this.hasRunningTool) {
-      this.queue.push({ kind: 'response.create', response });
+  requestResponse(send: SendEvent, response?: object, priority = 10): boolean {
+    if (this.responseLifecycle !== 'idle' || this.hasRunningTool) {
+      const queuedResponseIndex = this.queue.findIndex((action) => action.kind === 'response.create');
+      if (queuedResponseIndex === -1) {
+        this.enqueue({ kind: 'response.create', response, priority });
+      } else {
+        const queuedResponse = this.queue[queuedResponseIndex];
+        if (queuedResponse.kind === 'response.create' && priority < queuedResponse.priority) {
+          this.queue.splice(queuedResponseIndex, 1);
+          this.enqueue({ kind: 'response.create', response, priority });
+        }
+      }
       return false;
     }
-    const sent = send({ type: 'response.create', ...(response ? { response } : {}) });
+    const sent = send({
+      type: 'response.create',
+      response: response ?? DEFAULT_RESPONSE,
+    });
     if (sent) {
-      this.responseCreatePending = true;
+      this.responseLifecycle = 'creating';
       this.state = 'processing';
     }
     return sent;
   }
 
   onResponseCreated(responseId: string) {
-    this.responseCreatePending = false;
-    this.activeResponse = true;
+    if (this.responseLifecycle !== 'creating') {
+      // Guard: réponse créée sans requestResponse préalable → on ignore.
+      return;
+    }
+    this.responseLifecycle = 'active';
     this.responseId = responseId;
     this.state = 'assistant_speaking';
   }
@@ -107,21 +125,30 @@ export class ConversationMachine {
 
   onToolCallFinished(send: SendEvent, callId: string, output: string) {
     this.toolCallsRunning = Math.max(0, this.toolCallsRunning - 1);
-    // On envoie le résultat immédiatement, puis on redemande une réponse si aucun autre outil n'est en cours.
+    // Le résultat doit partir même si le backend a renvoyé une erreur métier.
     send({
       type: 'conversation.item.create',
       item: { type: 'function_call_output', call_id: callId, output },
     });
     if (this.toolCallsRunning === 0) {
-      this.activeResponse = false;
-      this.responseId = null;
-      this.requestResponse(send);
+      // La plupart des événements Realtime terminent la réponse après
+      // `response.function_call_arguments.done`. On met donc toujours la
+      // continuation en file si la réponse productrice est encore active.
+      // Elle sera envoyée uniquement après `response.done`.
+      this.requestResponse(send, undefined, 5);
     }
   }
 
-  onResponseDone(send: SendEvent, status: 'completed' | 'cancelled' | 'failed' | 'incomplete' | string) {
-    this.activeResponse = false;
-    this.responseCreatePending = false;
+  onResponseDone(
+    send: SendEvent,
+    status: 'completed' | 'cancelled' | 'failed' | 'incomplete' | string,
+    responseId?: string,
+  ): boolean {
+    if (responseId && (this.responseLifecycle === 'idle' || (this.responseId && this.responseId !== responseId))) {
+      return false;
+    }
+
+    this.responseLifecycle = 'completing';
     this.responseId = null;
 
     if (status === 'cancelled') {
@@ -132,18 +159,45 @@ export class ConversationMachine {
       this.state = 'listening';
     }
 
+    this.responseLifecycle = 'idle';
     this.flushQueue(send);
+    return true;
   }
 
-  onSpeechStarted(send: SendEvent) {
-    if (this.isResponseActive) {
-      send({ type: 'response.cancel' });
+  onResponseRequestRejected() {
+    if (this.responseLifecycle === 'creating') {
+      this.responseLifecycle = 'idle';
     }
-    this.activeResponse = false;
-    this.responseCreatePending = false;
-    this.responseId = null;
+    if (!this.isResponseActive && !this.hasRunningTool) {
+      this.state = 'recovering';
+    }
+  }
+
+  onCancellationRejected() {
+    if (!this.isResponseActive && !this.hasRunningTool) {
+      this.state = 'listening';
+    }
+  }
+
+  onSpeechStarted() {
+    // Avec server_vad + interrupt_response, OpenAI annule déjà la réponse
+    // lorsqu'il détecte la parole. Un response.cancel ici provoquerait une
+    // double annulation et l'erreur "no active response found".
     this.queue = this.queue.filter((action) => action.kind !== 'response.create');
     this.state = 'user_speaking';
+  }
+
+  private cancelActiveResponse(send: SendEvent): boolean {
+    if (this.responseLifecycle !== 'active') return false;
+    const sent = send({ type: 'response.cancel' });
+    if (sent) {
+      this.state = 'interrupted';
+    }
+    return sent;
+  }
+
+  cancelResponse(send: SendEvent): boolean {
+    return this.cancelActiveResponse(send);
   }
 
   onSpeechStopped() {
@@ -152,22 +206,37 @@ export class ConversationMachine {
     }
   }
 
+  private enqueue(action: QueuedAction) {
+    this.queue.push(action);
+    this.queue.sort((a, b) => a.priority - b.priority);
+  }
+
   private flushQueue(send: SendEvent) {
     const next = this.queue.shift();
     if (!next) return;
     if (next.kind === 'response.create') {
-      this.requestResponse(send, next.response);
+      const sent = this.requestResponse(send, next.response, next.priority);
+      if (!sent) {
+        this.queue.unshift(next);
+      }
     }
   }
 
   reset() {
     this.state = 'idle';
-    this.activeResponse = false;
-    this.responseCreatePending = false;
+    this.responseLifecycle = 'idle';
     this.toolCallsRunning = 0;
     this.queue = [];
     this.responseId = null;
     this.lastUserMessageQueuedAt = 0;
+  }
+
+  resetForReconnect() {
+    this.responseLifecycle = 'idle';
+    this.toolCallsRunning = 0;
+    this.queue = [];
+    this.responseId = null;
+    this.state = 'listening';
   }
 
   startRecovery() {

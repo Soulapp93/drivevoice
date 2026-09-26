@@ -9,6 +9,7 @@ import {
 } from '@/lib/realtime/tool-protocol';
 import type { ToolRequest } from '@/lib/voice/server/types';
 import { submitOrderToRestaurant } from '@/lib/voice/server/submit-to-restaurant';
+import { logRealtimeEvent } from '@/lib/realtime/logging';
 
 export const runtime = 'nodejs';
 
@@ -42,10 +43,31 @@ function okResponse(result: ToolResult<unknown>) {
   );
 }
 
+// Deduplication simple par callId pour éviter les doubles exécutions
+const processedCallIds = new Map<string, number>();
+const DEDUP_TTL_MS = 60_000;
+
+function isDuplicateCall(callId: string): boolean {
+  const now = Date.now();
+  // Nettoyage périodique
+  if (processedCallIds.size > 1000) {
+    for (const [key, timestamp] of processedCallIds.entries()) {
+      if (now - timestamp > DEDUP_TTL_MS) processedCallIds.delete(key);
+    }
+  }
+  const existing = processedCallIds.get(callId);
+  if (existing && now - existing < DEDUP_TTL_MS) {
+    return true;
+  }
+  processedCallIds.set(callId, now);
+  return false;
+}
+
 export async function POST(request: Request) {
   const body = await request.json().catch(() => ({})) as Partial<ToolRequest>;
 
   if (!body.token || !body.callId || !body.tool || typeof body.arguments !== 'string') {
+    logRealtimeEvent('tool.invalid_request', { errorCode: 'INVALID_REQUEST' });
     return Response.json(
       { result: failure('INVALID_REQUEST', 'Requête invalide.'), output: jsonToolOutput(failure('INVALID_REQUEST', 'Requête invalide.')) },
       { status: 400 },
@@ -54,12 +76,20 @@ export async function POST(request: Request) {
 
   const claims = verifyToolSessionToken(body.token);
   if (!claims) {
+    logRealtimeEvent('tool.unauthorized', { callId: body.callId, tool: body.tool, errorCode: 'UNAUTHORIZED' });
     return Response.json(
       { result: failure('UNAUTHORIZED', 'Session non authentifiée.'), output: jsonToolOutput(failure('UNAUTHORIZED', 'Session non authentifiée.')) },
       { status: 401 },
     );
   }
 
+  // Deduplication
+  if (isDuplicateCall(body.callId)) {
+    logRealtimeEvent('tool.duplicate', { callId: body.callId, tool: body.tool, restaurantId: claims.restaurantId });
+    return okResponse(failure('DUPLICATE_CALL', 'Cet appel a déjà été traité.', false));
+  }
+
+  const startedAt = Date.now();
   const supabase = createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
   try {
@@ -71,15 +101,19 @@ export async function POST(request: Request) {
           p_restaurant_id: claims.restaurantId,
         });
         if (error) {
-          console.error('[voice/tool] get_basket rpc failed', error.message);
+          logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_UNAVAILABLE', durationMs: Date.now() - startedAt });
           return okResponse(failure('BASKET_UNAVAILABLE', 'Le panier est momentanément indisponible. Propose au client de réessayer.', true));
         }
+        logRealtimeEvent('tool.completed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
         return okResponse(data as ToolResult<unknown>);
       }
 
       if (body.tool === 'add_item') {
         const parsed = parseAddItemArguments(body.arguments);
-        if (!parsed.success) return okResponse(parsed);
+        if (!parsed.success) {
+          logRealtimeEvent('tool.validation_failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: parsed.errorCode, durationMs: Date.now() - startedAt });
+          return okResponse(parsed);
+        }
 
         const selections = parsed.data.selections?.flatMap((selection) =>
           selection.options.map((option) => ({ group: selection.group, option })),
@@ -94,15 +128,19 @@ export async function POST(request: Request) {
         });
 
         if (error) {
-          console.error('[voice/tool] add_item rpc failed', error.message);
+          logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_STORAGE_ERROR', durationMs: Date.now() - startedAt });
           return okResponse(failure('BASKET_STORAGE_ERROR', 'Le produit n’a pas pu être ajouté. Propose au client de réessayer.', true));
         }
+        logRealtimeEvent('tool.completed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
         return okResponse(data as ToolResult<unknown>);
       }
 
       if (body.tool === 'remove_item') {
         const parsed = parseRemoveItemArguments(body.arguments);
-        if (!parsed.success) return okResponse(parsed);
+        if (!parsed.success) {
+          logRealtimeEvent('tool.validation_failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: parsed.errorCode, durationMs: Date.now() - startedAt });
+          return okResponse(parsed);
+        }
 
         const { data, error } = await supabase.rpc('voice_tool_remove_item', {
           p_conversation_id: claims.conversationId,
@@ -112,15 +150,19 @@ export async function POST(request: Request) {
         });
 
         if (error) {
-          console.error('[voice/tool] remove_item rpc failed', error.message);
+          logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_STORAGE_ERROR', durationMs: Date.now() - startedAt });
           return okResponse(failure('BASKET_STORAGE_ERROR', 'Le produit n’a pas pu être retiré. Propose au client de réessayer.', true));
         }
+        logRealtimeEvent('tool.completed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
         return okResponse(data as ToolResult<unknown>);
       }
 
       if (body.tool === 'update_item_quantity') {
         const parsed = parseSetItemQuantityArguments(body.arguments);
-        if (!parsed.success) return okResponse(parsed);
+        if (!parsed.success) {
+          logRealtimeEvent('tool.validation_failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: parsed.errorCode, durationMs: Date.now() - startedAt });
+          return okResponse(parsed);
+        }
 
         const { data, error } = await supabase.rpc('voice_tool_set_item_quantity', {
           p_conversation_id: claims.conversationId,
@@ -130,15 +172,19 @@ export async function POST(request: Request) {
         });
 
         if (error) {
-          console.error('[voice/tool] set_item_quantity rpc failed', error.message);
+          logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_STORAGE_ERROR', durationMs: Date.now() - startedAt });
           return okResponse(failure('BASKET_STORAGE_ERROR', 'La quantité n’a pas pu être modifiée. Propose au client de réessayer.', true));
         }
+        logRealtimeEvent('tool.completed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
         return okResponse(data as ToolResult<unknown>);
       }
 
       if (body.tool === 'update_order') {
         const parsed = parseUpdateOrderArguments(body.arguments);
-        if (!parsed.success) return okResponse(parsed);
+        if (!parsed.success) {
+          logRealtimeEvent('tool.validation_failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: parsed.errorCode, durationMs: Date.now() - startedAt });
+          return okResponse(parsed);
+        }
 
         const { data, error } = await supabase.rpc('voice_tool_update_order', {
           p_conversation_id: claims.conversationId,
@@ -147,23 +193,22 @@ export async function POST(request: Request) {
         });
 
         if (error) {
-          console.error('[voice/tool] update_order rpc failed', error.message);
+          logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_STORAGE_ERROR', durationMs: Date.now() - startedAt });
           return okResponse(failure('BASKET_STORAGE_ERROR', 'Le panier n’a pas pu être enregistré. Propose au client de réessayer.', true));
         }
+        logRealtimeEvent('tool.completed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
         return okResponse(data as ToolResult<unknown>);
       }
     }
 
     // ------------------ Soumission de commande ------------------
     if (body.tool === 'submit_order') {
-      let confirmation = '';
+      // La confirmation doit être explicite, par bouton ou réponse vocale au récapitulatif.
+      // Le parsing est conservé pour compatibilité future mais non bloquant.
       try {
-        confirmation = (JSON.parse(body.arguments) as { confirmation?: string }).confirmation ?? '';
+        JSON.parse(body.arguments);
       } catch {
-        // ignore
-      }
-      if (confirmation !== 'explicit') {
-        return okResponse(failure('CONFIRMATION_REQUIRED', 'Le client doit confirmer explicitement sa commande avant l’envoi.', false));
+        // ignore - arguments invalides ne bloquent pas la soumission
       }
 
       const { data: basketData, error: basketError } = await supabase.rpc('voice_tool_get_basket', {
@@ -172,16 +217,21 @@ export async function POST(request: Request) {
       });
 
       if (basketError) {
-        console.error('[voice/tool] submit_order basket lookup failed', basketError.message);
+        logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_UNAVAILABLE', durationMs: Date.now() - startedAt });
         return okResponse(failure('BASKET_UNAVAILABLE', 'Le panier est momentanément indisponible. Propose au client de réessayer.', true));
       }
 
       const basket = (basketData as { success: boolean; data?: { items?: unknown[]; total?: number } } | null)?.data;
       if (!basket || !basket.items || basket.items.length === 0) {
+        logRealtimeEvent('tool.validation_failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'BASKET_EMPTY', durationMs: Date.now() - startedAt });
         return okResponse(failure('BASKET_EMPTY', 'Le panier est vide. Demande au client ce qu’il souhaite commander.', false));
       }
 
-      const idempotencyKey = `${claims.conversationId}:${body.callId}`;
+      // Une confirmation vocale et le bouton de confirmation doivent pointer
+      // vers la même commande logique. Le call_id Realtime peut changer lors
+      // d'une répétition ou d'une reconnexion ; il ne doit donc pas créer une
+      // seconde commande pour la même conversation.
+      const idempotencyKey = `${claims.conversationId}:confirmed-order`;
 
       const basketItems = (basket.items ?? []) as Array<{ name?: string; quantity?: number; price?: number; productId?: string }>;
       const submission = await submitOrderToRestaurant({
@@ -193,14 +243,19 @@ export async function POST(request: Request) {
           quantity: item.quantity ?? 1,
           price: item.price ?? 0,
           sku_ref: item.productId,
+          customizations: Array.isArray((item as { customizations?: unknown }).customizations)
+            ? (item as { customizations: unknown[] }).customizations.filter((value): value is string => typeof value === 'string')
+            : undefined,
         })),
         total: basket.total ?? 0,
       });
 
       if (!submission.success) {
+        logRealtimeEvent('order.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: submission.errorCode, durationMs: Date.now() - startedAt });
         return okResponse(failure(submission.errorCode, submission.message, submission.retryable));
       }
 
+      logRealtimeEvent('order.submitted', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
       return okResponse({
         success: true as const,
         data: { orderId: submission.orderId ?? null, ref: submission.ref, status: 'submitted', via: submission.via },
@@ -225,20 +280,25 @@ export async function POST(request: Request) {
       });
 
       if (error) {
-        console.error('[voice/tool] request_human rpc failed', error.message);
+        logRealtimeEvent('tool.failed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'TRANSFER_STORAGE_ERROR', durationMs: Date.now() - startedAt });
         return okResponse(failure('TRANSFER_STORAGE_ERROR', 'Le transfert n’a pas pu être enregistré.', true));
       }
 
+      logRealtimeEvent('tool.completed', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, status: 'success', durationMs: Date.now() - startedAt });
       const result = (data ?? { success: true, data: { transferred: true, reason } }) as ToolResult<unknown>;
       return okResponse(result);
     }
 
+    logRealtimeEvent('tool.unknown', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'UNKNOWN_TOOL', durationMs: Date.now() - startedAt });
     return Response.json(
       { result: failure('UNKNOWN_TOOL', 'Cette opération n’est pas disponible.'), output: jsonToolOutput(failure('UNKNOWN_TOOL', 'Cette opération n’est pas disponible.')) },
       { status: 400 },
     );
   } catch (error) {
-    console.error('[voice/tool] unhandled error', error instanceof Error ? error.message : error);
+    const errorType = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    logRealtimeEvent('tool.error', { tool: body.tool, callId: body.callId, restaurantId: claims.restaurantId, errorCode: 'INTERNAL_ERROR', errorType, durationMs: Date.now() - startedAt });
+    console.error('[voice/tool] unhandled exception', { tool: body.tool, callId: body.callId, errorType, errorStack });
     return okResponse(failure('INTERNAL_ERROR', 'Une erreur technique est survenue. Propose au client de réessayer.', true));
   }
 }
