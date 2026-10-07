@@ -5,7 +5,6 @@ import { logRealtimeEvent } from '@/lib/realtime/logging';
 
 export const runtime = 'nodejs';
 
-const supportedBrands = new Set(['La Piazza République', 'Burger King', 'Burger King Loire', "McDonald's", 'Quick', 'KFC']);
 const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 const burgerKingDemoRestaurantId = '31065664-a449-4fe3-a311-de880b436726';
 const demoRestaurantName = 'La Piazza République';
@@ -16,6 +15,9 @@ type CatalogOption = {
   id?: number;
   name: string;
   priceDelta?: number;
+  priceDeltaBySize?: Record<string, number>;
+  availableFor?: string[];
+  available?: boolean;
 };
 
 type CatalogOptionGroup = {
@@ -24,6 +26,7 @@ type CatalogOptionGroup = {
   required?: boolean;
   min?: number;
   max?: number;
+  rulesBySize?: Record<string, { required: boolean; min: number; max: number }>;
   options: CatalogOption[];
 };
 
@@ -32,21 +35,36 @@ type CatalogEntry = {
   name: string;
   price: number;
   category?: string;
+  detail?: string;
+  mainProduct?: string;
   optionGroups?: CatalogOptionGroup[];
 };
 
-const demoProductIds = new Set([
-  // Menus phares
-  'bkfr_18','bkfr_19','bkfr_20','bkfr_21','bkfr_22','bkfr_23','bkfr_24','bkfr_25','bkfr_26','bkfr_11','bkfr_15',
-  // Burgers seuls
-  'bkfr_41','bkfr_42','bkfr_43','bkfr_44','bkfr_45','bkfr_46','bkfr_47','bkfr_48','bkfr_49','bkfr_50',
-  // Accompagnements
-  'bkfr_77','bkfr_78','bkfr_79','bkfr_75','bkfr_76','bkfr_64','bkfr_67','bkfr_83','bkfr_84','bkfr_85','bkfr_62','bkfr_63',
-  // Boissons
-  'bkfr_123','bkfr_124','bkfr_125','bkfr_114','bkfr_115','bkfr_116','bkfr_117','bkfr_118','bkfr_119','bkfr_126','bkfr_127','bkfr_128','bkfr_120',
-  // Desserts
-  'bkfr_104','bkfr_107','bkfr_108','bkfr_109',
-]);
+const managerRoles = new Set(['owner', 'admin', 'manager', 'directeur', 'administrateur', 'operator', 'operateur', 'opérateur']);
+
+async function canAccessRestaurant(accessToken: string | null, restaurantId: string): Promise<boolean> {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!accessToken || !serviceRoleKey) return false;
+
+  const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
+  if (userError || !userData.user) return false;
+
+  const { data: restaurant, error: restaurantError } = await supabase
+    .from('restaurants')
+    .select('id,owner_id,active')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  if (restaurantError || !restaurant || restaurant.active === false) return false;
+  if (restaurant.owner_id === userData.user.id) return true;
+
+  const [{ data: admin }, { data: membership }] = await Promise.all([
+    supabase.from('platform_admins').select('id').eq('user_id', userData.user.id).eq('active', true).maybeSingle(),
+    supabase.from('restaurant_members').select('role').eq('restaurant_id', restaurantId).eq('user_id', userData.user.id).maybeSingle(),
+  ]);
+  return Boolean(admin || (membership?.role && managerRoles.has(membership.role.toLowerCase())));
+}
+
 
 async function fetchCatalog(restaurantId: string): Promise<CatalogEntry[]> {
   try {
@@ -74,11 +92,21 @@ async function fetchCatalog(restaurantId: string): Promise<CatalogEntry[]> {
           .map((group) => ({
             name: String(group.name ?? ''),
             required: group.required === true,
+            min: typeof group.min === 'number' ? group.min : 0,
+            max: typeof group.max === 'number' ? group.max : 1,
+            rulesBySize: group.rulesBySize && typeof group.rulesBySize === 'object' && !Array.isArray(group.rulesBySize)
+              ? group.rulesBySize as CatalogOptionGroup['rulesBySize']
+              : undefined,
             options: (Array.isArray(group.options) ? group.options : [])
               .filter((option): option is Record<string, unknown> => typeof option === 'object' && option !== null && !Array.isArray(option))
               .map((option) => ({
                 name: String(option.name ?? ''),
-                priceDelta: typeof option.priceDelta === 'number' ? option.priceDelta : undefined,
+                priceDelta: typeof option.priceDelta === 'number' ? option.priceDelta : 0,
+                priceDeltaBySize: option.priceDeltaBySize && typeof option.priceDeltaBySize === 'object' && !Array.isArray(option.priceDeltaBySize)
+                  ? option.priceDeltaBySize as Record<string, number>
+                  : undefined,
+                availableFor: Array.isArray(option.availableFor) ? option.availableFor.filter((size): size is string => typeof size === 'string') : undefined,
+                available: option.available !== false,
               })),
           }))
           .filter((group) => group.name && group.options.length > 0);
@@ -88,10 +116,11 @@ async function fetchCatalog(restaurantId: string): Promise<CatalogEntry[]> {
           name: String(record.name),
           price: Number(record.price ?? 0),
           category: typeof record.category === 'string' ? record.category : undefined,
+          detail: typeof record.detail === 'string' ? record.detail : undefined,
+          mainProduct: typeof record.mainProduct === 'string' ? record.mainProduct : undefined,
           ...(optionGroups.length > 0 ? { optionGroups } : {}),
         };
-      })
-      .filter((entry) => demoProductIds.has(entry.productId));
+      });
 
     return catalog;
   } catch (err) {
@@ -103,23 +132,40 @@ async function fetchCatalog(restaurantId: string): Promise<CatalogEntry[]> {
 function formatCatalog(catalog: CatalogEntry[]): string {
   if (catalog.length === 0) return 'Aucun produit disponible pour le moment.';
   return catalog
-    .map((entry) => `- ${entry.productId} : ${entry.name}${entry.category ? ` (${entry.category})` : ''} — ${entry.price.toFixed(2).replace('.', ',')} €`)
+    .map((entry) => {
+      const lines = [`- ${entry.productId} : ${entry.name}${entry.mainProduct ? ` (produit principal : ${entry.mainProduct})` : ''}${entry.category ? ` (${entry.category})` : ''} — ${entry.price.toFixed(2).replace('.', ',')} €${entry.detail ? ` — ${entry.detail}` : ''}`];
+      for (const group of entry.optionGroups ?? []) {
+        const options = group.options.map((option) => {
+          const availability = option.availableFor?.length ? ` [tailles : ${option.availableFor.join(', ')}]` : '';
+          const prices = Object.entries(option.priceDeltaBySize ?? {}).map(([size, price]) => `${size} +${price.toFixed(2).replace('.', ',')} €`);
+          const priceText = prices.length ? ` [${prices.join('; ')}]` : option.priceDelta ? ` [+${option.priceDelta.toFixed(2).replace('.', ',')} €]` : '';
+          return `${option.name}${availability}${priceText}`;
+        });
+        const rules = Object.entries(group.rulesBySize ?? {}).map(([size, rule]) => `${size}: ${rule.required ? 'obligatoire' : 'facultatif'}, ${rule.min} à ${rule.max} choix`);
+        lines.push(`  ${group.name}${rules.length ? ` (${rules.join(' | ')})` : ''} : ${options.join(', ')}`);
+      }
+      return lines.join('\n');
+    })
     .join('\n');
 }
 
-const instructions = (brand: string, catalog: CatalogEntry[]) => `Tu es un équipier au drive de ${brand}.
+const instructions = (brand: string, catalog: CatalogEntry[]) => `Tu es un équipier de prise de commande pour le restaurant ${JSON.stringify(brand)}.
 
-CARTE
+CARTE OFFICIELLE
 ${formatCatalog(catalog)}
 
 RÈGLES
 - Prends les commandes en français, brièvement et naturellement.
-- Utilise add_item dès qu'un produit est demandé, avec le product_id exact.
+- Pour un menu, demande la taille avant les choix. Propose uniquement les options disponibles pour cette taille et respecte ses règles de sélection.
+- Demande chaque choix obligatoire avant d’appeler add_item. Transmets dans selections le nom exact de chaque groupe et toutes les options choisies, y compris la taille.
+- Les suppléments de taille et tarifs affichés pour chaque option déterminent le prix; ne promets jamais un prix différent.
+- N’invente ni produit, ni option, ni prix. Si une composition requise est indisponible, demande au client de choisir une alternative.
+- Utilise add_item dès qu’un produit et toutes ses options requises sont confirmés, avec le product_id exact.
 - Corrige avec remove_item ou update_item_quantity.
-- Utilise get_basket pour le récap final.
-- Quand le client dit "c'est tout" ou "j'ai fini", donne le récap et demande : "Je valide ?".
-- N'appelle submit_order que sur confirmation explicite ("oui", "je confirme", "validez").
-- Sois concis, chaleureux, et ne récite pas la carte.`;
+- Utilise get_basket pour le récapitulatif final.
+- Quand le client dit « c’est tout » ou « j’ai fini », donne le récapitulatif et demande : « Je valide ? ».
+- N’appelle submit_order qu’après confirmation explicite (« oui », « je confirme », « validez »).
+- Sois concis, chaleureux, et ne récite pas toute la carte.`;
 
 export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -134,15 +180,19 @@ export async function POST(request: Request) {
   }
 
   const url = new URL(request.url);
-  const requestedBrand = url.searchParams.get('brand') ?? '';
-  const brand = supportedBrands.has(requestedBrand) ? requestedBrand : demoRestaurantName;
+  const requestedBrand = url.searchParams.get('brand')?.trim().slice(0, 100) ?? '';
+  const brand = requestedBrand || demoRestaurantName;
   const configuredRestaurantId = process.env.DRIVEVOICE_RESTAURANT_ID || demoRestaurantId;
   const requestedRestaurantId = url.searchParams.get('restaurantId');
   const restaurantId = requestedRestaurantId || configuredRestaurantId;
-  const allowedRestaurantIds = new Set([configuredRestaurantId, burgerKingDemoRestaurantId]);
-  if (!allowedRestaurantIds.has(restaurantId)) {
+  if (!/^[0-9a-f-]{36}$/i.test(restaurantId)) {
+    return Response.json({ error: 'Identifiant du restaurant invalide.' }, { status: 400 });
+  }
+  const demoRestaurantIds = new Set([configuredRestaurantId, burgerKingDemoRestaurantId]);
+  const accessToken = request.headers.get('authorization')?.match(/^Bearer\s+(.+)$/i)?.[1] ?? null;
+  if (!demoRestaurantIds.has(restaurantId) && !(await canAccessRestaurant(accessToken, restaurantId))) {
     logRealtimeEvent('session.unauthorized_restaurant', { restaurantId, errorCode: 'FORBIDDEN' });
-    return Response.json({ error: 'Restaurant non autorisé pour cette session.' }, { status: 403 });
+    return Response.json({ error: 'Votre compte n’est pas autorisé à accéder à ce restaurant.' }, { status: 403 });
   }
   const conversationId = url.searchParams.get('conversationId') || crypto.randomUUID();
   const traceId = crypto.randomUUID();

@@ -175,7 +175,32 @@ alter table public.restaurant_hubrise_connections enable row level security;
 drop policy if exists "restaurant_hubrise_connections_open" on public.restaurant_hubrise_connections;
 
 -- ============================================================
--- 6) updated_at automatique
+-- 6) DEMANDES D'INTÉGRATION (formulaire public)
+-- ============================================================
+create table if not exists public.demo_requests (
+  id               uuid primary key default gen_random_uuid(),
+  full_name        text not null,
+  email            text not null,
+  phone            text not null,
+  restaurant_name  text not null,
+  restaurant_count integer not null default 1,
+  role             text not null,
+  message          text not null,
+  received_at      timestamptz not null default now()
+);
+
+alter table public.demo_requests enable row level security;
+
+drop policy if exists "demo_requests_insert_anon" on public.demo_requests;
+create policy "demo_requests_insert_anon" on public.demo_requests
+  for insert to anon, authenticated with check (true);
+
+drop policy if exists "demo_requests_select_admin" on public.demo_requests;
+create policy "demo_requests_select_admin" on public.demo_requests
+  for select to authenticated using (true);
+
+-- ============================================================
+-- 7) updated_at automatique
 -- ============================================================
 create or replace function public.set_updated_at()
 returns trigger language plpgsql as $$

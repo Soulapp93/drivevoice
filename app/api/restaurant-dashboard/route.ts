@@ -41,7 +41,7 @@ export async function GET(request: Request) {
 
   const [{ data: platformAdmin, error: adminError }, { data: membership, error: membershipError }] = await Promise.all([
     supabase.from('platform_admins').select('id').eq('user_id', userData.user.id).eq('active', true).maybeSingle(),
-    supabase.from('restaurant_members').select('role').eq('restaurant_id', restaurantId).eq('user_id', userData.user.id).eq('active', true).maybeSingle(),
+    supabase.from('restaurant_members').select('role').eq('restaurant_id', restaurantId).eq('user_id', userData.user.id).maybeSingle(),
   ]);
   if (adminError || membershipError) {
     return Response.json({ error: 'Impossible de vérifier les droits d’accès.' }, { status: 502 });

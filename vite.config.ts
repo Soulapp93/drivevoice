@@ -49,11 +49,11 @@ export default defineConfig(async (): Promise<UserConfig> => {
     css: { postcss: { plugins: [tailwindcss()] } },
     server: {
       host: '0.0.0.0',
-      port: 5173,
+      port: 5184,
       allowedHosts: true,
       hmr: {
         protocol: 'wss',
-        host: '1f22a1ba-5173-10-base.preview.verdent.ai',
+        host: '1f22a1ba-5184-10-base.preview.verdent.ai',
         clientPort: 443,
       },
       ...(isCodexSeatbeltSandbox

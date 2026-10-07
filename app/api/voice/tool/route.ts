@@ -7,7 +7,6 @@ import {
   parseUpdateOrderArguments,
   type ToolResult,
 } from '@/lib/realtime/tool-protocol';
-import type { ToolRequest } from '@/lib/voice/server/types';
 import { submitOrderToRestaurant } from '@/lib/voice/server/submit-to-restaurant';
 import { logRealtimeEvent } from '@/lib/realtime/logging';
 
@@ -32,6 +31,8 @@ function jsonToolOutput(result: { success: boolean; errorCode?: string; message?
 }
 
 type IncrementalToolName = 'add_item' | 'remove_item' | 'update_item_quantity' | 'update_order' | 'get_basket';
+type VoiceApiToolName = IncrementalToolName | 'submit_order' | 'request_human';
+type VoiceToolRequest = { token?: string; callId?: string; tool?: VoiceApiToolName; arguments?: string };
 
 const isIncrementalToolName = (value: string): value is IncrementalToolName =>
   value === 'add_item' || value === 'remove_item' || value === 'update_item_quantity' || value === 'update_order' || value === 'get_basket';
@@ -64,7 +65,7 @@ function isDuplicateCall(callId: string): boolean {
 }
 
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => ({})) as Partial<ToolRequest>;
+  const body = await request.json().catch(() => ({})) as VoiceToolRequest;
 
   if (!body.token || !body.callId || !body.tool || typeof body.arguments !== 'string') {
     logRealtimeEvent('tool.invalid_request', { errorCode: 'INVALID_REQUEST' });
@@ -115,16 +116,12 @@ export async function POST(request: Request) {
           return okResponse(parsed);
         }
 
-        const selections = parsed.data.selections?.flatMap((selection) =>
-          selection.options.map((option) => ({ group: selection.group, option })),
-        ) ?? [];
-
         const { data, error } = await supabase.rpc('voice_tool_add_item', {
           p_conversation_id: claims.conversationId,
           p_restaurant_id: claims.restaurantId,
           p_product_id: parsed.data.product_id,
           p_quantity: parsed.data.quantity,
-          p_selections_json: selections,
+          p_selections_json: parsed.data.selections ?? [],
         });
 
         if (error) {
@@ -244,7 +241,14 @@ export async function POST(request: Request) {
           price: item.price ?? 0,
           sku_ref: item.productId,
           customizations: Array.isArray((item as { customizations?: unknown }).customizations)
-            ? (item as { customizations: unknown[] }).customizations.filter((value): value is string => typeof value === 'string')
+            ? (item as { customizations: unknown[] }).customizations.flatMap((value) => {
+                if (typeof value === 'string') return [value];
+                if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+                const customization = value as { group?: unknown; option?: unknown };
+                return typeof customization.group === 'string' && typeof customization.option === 'string'
+                  ? [`${customization.group}: ${customization.option}`]
+                  : [];
+              })
             : undefined,
         })),
         total: basket.total ?? 0,

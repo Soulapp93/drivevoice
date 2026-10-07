@@ -15,6 +15,9 @@ export type CatalogOption = {
   id: number;
   name: string;
   priceDelta: number;
+  price?: number;
+  priceDeltaBySize?: Record<string, number>;
+  availableFor?: string[];
   available: boolean;
 };
 
@@ -24,6 +27,7 @@ export type CatalogOptionGroup = {
   min: number;
   max: number;
   required?: boolean;
+  rulesBySize?: Record<string, { required: boolean; min: number; max: number }>;
   options: CatalogOption[];
 };
 
@@ -139,26 +143,50 @@ function normalizeCatalogProduct(value: unknown): CatalogProduct | null {
   const rawGroups = Array.isArray(value.optionGroups) ? value.optionGroups : [];
   const optionGroups = rawGroups.flatMap((rawGroup): CatalogOptionGroup[] => {
     if (!isRecord(rawGroup) || typeof rawGroup.name !== 'string' || !Array.isArray(rawGroup.options)) return [];
-    const options = rawGroup.options.flatMap((rawOption): CatalogOption[] => {
+    const options = rawGroup.options.flatMap((rawOption, optionIndex): CatalogOption[] => {
       if (!isRecord(rawOption) || typeof rawOption.name !== 'string') return [];
       const optionId = Number(rawOption.id);
-      const priceDelta = Number(rawOption.priceDelta);
-      if (!Number.isFinite(optionId) || !Number.isFinite(priceDelta)) return [];
+      const priceDelta = Number(rawOption.priceDelta ?? 0);
+      const priceDeltaBySize = isRecord(rawOption.priceDeltaBySize)
+        ? Object.fromEntries(Object.entries(rawOption.priceDeltaBySize).flatMap(([size, delta]) => {
+          const numericDelta = Number(delta);
+          return Number.isFinite(numericDelta) ? [[size, numericDelta]] : [];
+        }))
+        : undefined;
       return [{
-        id: optionId,
+        id: Number.isFinite(optionId) ? optionId : optionIndex + 1,
         name: rawOption.name,
-        priceDelta,
+        priceDelta: Number.isFinite(priceDelta) ? priceDelta : 0,
+        ...(priceDeltaBySize ? { priceDeltaBySize } : {}),
+        ...(Array.isArray(rawOption.availableFor)
+          ? { availableFor: rawOption.availableFor.filter((size): size is string => typeof size === 'string') }
+          : {}),
         available: rawOption.available !== false,
       }];
     });
-    const min = Math.max(0, Math.trunc(Number(rawGroup.min) || (rawGroup.required ? 1 : 0)));
-    const max = Math.max(min, Math.trunc(Number(rawGroup.max) || Math.max(min, options.length)));
+    const required = rawGroup.required === true;
+    const rawMin = Number(rawGroup.min ?? (required ? 1 : 0));
+    const min = Math.max(0, Math.trunc(Number.isFinite(rawMin) ? rawMin : required ? 1 : 0));
+    const rawMax = Number(rawGroup.max ?? Math.max(min, options.length));
+    const max = Math.max(min, Math.trunc(Number.isFinite(rawMax) ? rawMax : Math.max(min, options.length)));
+    const rulesBySize = isRecord(rawGroup.rulesBySize)
+      ? Object.fromEntries(Object.entries(rawGroup.rulesBySize).flatMap(([size, rawRule]) => {
+        if (!isRecord(rawRule)) return [];
+        const ruleRequired = rawRule.required === true;
+        const ruleMinValue = Number(rawRule.min ?? (ruleRequired ? 1 : 0));
+        const ruleMin = Math.max(0, Math.trunc(Number.isFinite(ruleMinValue) ? ruleMinValue : ruleRequired ? 1 : 0));
+        const ruleMaxValue = Number(rawRule.max ?? Math.max(ruleMin, options.length));
+        const ruleMax = Math.max(ruleMin, Math.trunc(Number.isFinite(ruleMaxValue) ? ruleMaxValue : Math.max(ruleMin, options.length)));
+        return [[size, { required: ruleRequired, min: ruleMin, max: ruleMax }]];
+      }))
+      : undefined;
     return [{
       id: Number(rawGroup.id) || 0,
       name: rawGroup.name,
       min,
       max,
-      required: rawGroup.required === true,
+      required,
+      ...(rulesBySize ? { rulesBySize } : {}),
       options,
     }];
   });
@@ -181,10 +209,31 @@ export function normalizeCatalog(value: unknown): CatalogProduct[] {
   });
 }
 
+const sizeMatches = (configuredSize: string, selectedSize: string) => {
+  const aliasesBySelectedSize: Record<string, string[]> = {
+    Medium: ['Medium', 'M'],
+    'King Size': ['King Size', 'King', 'L', 'XL'],
+    Extra: ['Extra', 'XXL', 'XL'],
+  };
+  const aliases = Object.entries(aliasesBySelectedSize).find(([size]) => size.toLowerCase() === selectedSize.toLowerCase())?.[1] ?? [selectedSize];
+  return aliases.some(alias => alias.toLowerCase() === configuredSize.toLowerCase());
+};
+
 function resolveSelections(product: CatalogProduct, selections: OrderSelection[] | undefined): ToolResult<{ labels: string[]; priceDelta: number }> {
   const groups = product.optionGroups ?? [];
   const provided = selections ?? [];
   const labels: string[] = [];
+  const providedGroupNames = provided.map(selection => selection.group.toLowerCase());
+  if (new Set(providedGroupNames).size !== providedGroupNames.length) {
+    return errorResult('INVALID_OPTIONS', 'Un même groupe d’options a été envoyé plusieurs fois.');
+  }
+
+  const sizeGroup = groups.find(group => /taille/i.test(group.name));
+  const sizeSelection = sizeGroup && provided.find(selection => selection.group.toLowerCase() === sizeGroup.name.toLowerCase());
+  const selectedSize = sizeSelection?.options[0];
+  if (sizeGroup && (!sizeSelection || sizeSelection.options.length !== 1)) {
+    return errorResult('REQUIRED_OPTIONS_MISSING', 'La taille du menu doit être choisie.');
+  }
   let priceDelta = 0;
 
   for (const group of groups) {
@@ -195,19 +244,33 @@ function resolveSelections(product: CatalogProduct, selections: OrderSelection[]
       return errorResult('INVALID_OPTIONS', `Le groupe « ${group.name} » contient une option dupliquée.`);
     }
     const selectedOptions = selectedNames.map(optionName => group.options.find(option => option.name.toLowerCase() === optionName.toLowerCase()));
-    if (selectedOptions.some(option => !option || !option.available)) {
-      return errorResult('OPTION_UNAVAILABLE', `Une option du groupe « ${group.name} » est indisponible.`);
+    const unavailableOption = selectedOptions.some(option =>
+      !option
+      || !option.available
+      || (Boolean(selectedSize) && option.availableFor !== undefined && !option.availableFor.some(size => sizeMatches(size, selectedSize!))),
+    );
+    if (unavailableOption) {
+      return errorResult('OPTION_UNAVAILABLE', `Une option du groupe « ${group.name} » n’est pas disponible pour la taille choisie.`);
     }
-    if (selectedOptions.length < group.min) {
-      return errorResult('REQUIRED_OPTIONS_MISSING', `Le choix « ${group.name} » est obligatoire.`);
+
+    const sizeRule = selectedSize && group.rulesBySize
+      ? Object.entries(group.rulesBySize).find(([size]) => sizeMatches(size, selectedSize))?.[1]
+      : undefined;
+    const min = sizeRule?.min ?? group.min;
+    const max = sizeRule?.max ?? group.max;
+    if (selectedOptions.length < min) {
+      return errorResult('REQUIRED_OPTIONS_MISSING', `Le choix « ${group.name} » est obligatoire pour ${selectedSize ?? 'ce produit'}.`);
     }
-    if (selectedOptions.length > group.max) {
+    if (selectedOptions.length > max) {
       return errorResult('TOO_MANY_OPTIONS', `Trop d’options ont été sélectionnées pour « ${group.name} ».`);
     }
     for (const option of selectedOptions) {
       if (!option) continue;
       labels.push(`${group.name}: ${option.name}`);
-      priceDelta += option.priceDelta;
+      const sizePrice = selectedSize && option.priceDeltaBySize
+        ? Object.entries(option.priceDeltaBySize).find(([size]) => sizeMatches(size, selectedSize))?.[1]
+        : undefined;
+      priceDelta += sizePrice ?? option.priceDelta;
     }
   }
 
@@ -396,7 +459,7 @@ export function buildRealtimeToolDefinitions(productIds: string[] = []) {
     {
       type: 'function',
       name: 'add_item',
-      description: 'Ajoute immédiatement un produit au panier du client. À utiliser dès que le client demande un article.',
+      description: 'Ajoute un produit au panier après avoir confirmé les choix requis. Pour un menu, demande d’abord la taille, puis chaque choix obligatoire disponible pour cette taille, et transmets toutes les sélections avec leur groupe exact.',
       parameters: {
         type: 'object',
         properties: {

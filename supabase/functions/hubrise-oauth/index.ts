@@ -193,9 +193,8 @@ Deno.serve(async (req) => {
       const supabase = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
       const { data, error } = await supabase
         .from('restaurant_products')
-        .select('product_id, name, category, price, available, data')
+        .select('product_id, name, category, price, available, display_order, data')
         .eq('restaurant_id', body.restaurantId)
-        .eq('available', true)
         .order('display_order');
       if (error) throw new Error(error.message);
       const products = (data ?? []).map((row) => ({
@@ -204,6 +203,7 @@ Deno.serve(async (req) => {
         category: row.category,
         price: row.price,
         available: row.available,
+        display_order: row.display_order,
         data: row.data,
       }));
       return jsonResponse({ products });

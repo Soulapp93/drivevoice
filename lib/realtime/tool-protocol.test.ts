@@ -46,6 +46,67 @@ const catalog: CatalogProduct[] = [
   },
 ];
 
+const sizeMenu: CatalogProduct = {
+  productId: 'whopper-menu',
+  name: 'Menu Whopper',
+  detail: 'Whopper',
+  price: 10,
+  available: true,
+  optionGroups: [
+    {
+      id: 1,
+      name: 'Tailles',
+      required: true,
+      min: 1,
+      max: 1,
+      options: [
+        { id: 11, name: 'Medium', priceDelta: 0, available: true },
+        { id: 12, name: 'Large', priceDelta: 2, available: true },
+      ],
+    },
+    {
+      id: 2,
+      name: 'Accompagnements',
+      required: true,
+      min: 1,
+      max: 1,
+      rulesBySize: {
+        Medium: { required: true, min: 1, max: 1 },
+        Large: { required: true, min: 1, max: 1 },
+      },
+      options: [
+        { id: 21, name: 'Frites moyennes', priceDelta: 0, available: true, availableFor: ['Medium'] },
+        { id: 22, name: 'Grande frite', priceDelta: 0, available: true, availableFor: ['Large'] },
+      ],
+    },
+    {
+      id: 3,
+      name: 'Boissons',
+      required: true,
+      min: 1,
+      max: 1,
+      rulesBySize: {
+        Medium: { required: true, min: 1, max: 1 },
+        Large: { required: false, min: 0, max: 1 },
+      },
+      options: [
+        { id: 31, name: 'Coca-Cola 40 cl', priceDelta: 0, available: true, availableFor: ['Medium'] },
+        { id: 32, name: 'Coca-Cola 50 cl', priceDelta: 0, available: true, availableFor: ['Large'] },
+      ],
+    },
+    {
+      id: 4,
+      name: 'Suppléments',
+      required: false,
+      min: 0,
+      max: 1,
+      options: [
+        { id: 41, name: 'Cheddar', priceDelta: 0.5, priceDeltaBySize: { Medium: 0.5, Large: 1.5 }, available: true },
+      ],
+    },
+  ],
+};
+
 const validMenu = JSON.stringify({
   items: [{ product_id: 'menu', quantity: 1, selections: [{ group: 'Boisson', options: ['Cola zéro'] }] }],
   status: 'editing',
@@ -189,6 +250,124 @@ test('calcule le supplément d’option dans le total', () => {
     assert.equal(result.data.total, 13.4);
     assert.equal(result.data.status, 'ready_to_confirm');
   }
+});
+
+test('applique composition et tarifs propres à la taille large', () => {
+  const parsed = parseUpdateOrderArguments(JSON.stringify({
+    items: [{
+      product_id: 'whopper-menu',
+      quantity: 1,
+      selections: [
+        { group: 'Tailles', options: ['Large'] },
+        { group: 'Accompagnements', options: ['Grande frite'] },
+        { group: 'Suppléments', options: ['Cheddar'] },
+      ],
+    }],
+    status: 'editing',
+  }));
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const result = applyUpdateOrder('restaurant-a', parsed.data, [sizeMenu]);
+  assert.equal(result.success, true);
+  if (result.success) {
+    assert.equal(result.data.items[0].price, 13.5);
+    assert.deepEqual(result.data.items[0].customizations, [
+      'Tailles: Large',
+      'Accompagnements: Grande frite',
+      'Suppléments: Cheddar',
+    ]);
+  }
+});
+
+test('refuse une taille de menu non sélectionnée', () => {
+  const parsed = parseUpdateOrderArguments(JSON.stringify({
+    items: [{ product_id: 'whopper-menu', quantity: 1 }],
+    status: 'editing',
+  }));
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const result = applyUpdateOrder('restaurant-a', parsed.data, [sizeMenu]);
+  assert.equal(result.success, false);
+  if (!result.success) assert.equal(result.errorCode, 'REQUIRED_OPTIONS_MISSING');
+});
+
+test('reconnaît les alias de taille pour les choix et tarifs', () => {
+  const aliasedMenu: CatalogProduct = {
+    ...sizeMenu,
+    optionGroups: sizeMenu.optionGroups?.map(group => {
+      if (group.name === 'Accompagnements') {
+        return {
+          ...group,
+          rulesBySize: { M: { required: true, min: 1, max: 1 } },
+          options: group.options.map(option => option.name === 'Frites moyennes' ? { ...option, availableFor: ['M'] } : option),
+        };
+      }
+      if (group.name === 'Suppléments') {
+        return {
+          ...group,
+          options: group.options.map(option => ({ ...option, priceDeltaBySize: { M: 0.75 } })),
+        };
+      }
+      return group;
+    }),
+  };
+  const parsed = parseUpdateOrderArguments(JSON.stringify({
+    items: [{
+      product_id: 'whopper-menu',
+      quantity: 1,
+      selections: [
+        { group: 'Tailles', options: ['Medium'] },
+        { group: 'Accompagnements', options: ['Frites moyennes'] },
+        { group: 'Boissons', options: ['Coca-Cola 40 cl'] },
+        { group: 'Suppléments', options: ['Cheddar'] },
+      ],
+    }],
+    status: 'editing',
+  }));
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const result = applyUpdateOrder('restaurant-a', parsed.data, [aliasedMenu]);
+  assert.equal(result.success, true);
+  if (result.success) assert.equal(result.data.items[0].price, 10.75);
+});
+
+test('les règles de taille peuvent rendre un groupe facultatif', () => {
+  const parsed = parseUpdateOrderArguments(JSON.stringify({
+    items: [{
+      product_id: 'whopper-menu',
+      quantity: 1,
+      selections: [
+        { group: 'Tailles', options: ['Large'] },
+        { group: 'Accompagnements', options: ['Grande frite'] },
+      ],
+    }],
+    status: 'editing',
+  }));
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const result = applyUpdateOrder('restaurant-a', parsed.data, [sizeMenu]);
+  assert.equal(result.success, true);
+  if (result.success) assert.equal(result.data.items[0].price, 12);
+});
+
+test('refuse une option réservée à une autre taille', () => {
+  const parsed = parseUpdateOrderArguments(JSON.stringify({
+    items: [{
+      product_id: 'whopper-menu',
+      quantity: 1,
+      selections: [
+        { group: 'Tailles', options: ['Medium'] },
+        { group: 'Accompagnements', options: ['Grande frite'] },
+        { group: 'Boissons', options: ['Coca-Cola 40 cl'] },
+      ],
+    }],
+    status: 'editing',
+  }));
+  assert.equal(parsed.success, true);
+  if (!parsed.success) return;
+  const result = applyUpdateOrder('restaurant-a', parsed.data, [sizeMenu]);
+  assert.equal(result.success, false);
+  if (!result.success) assert.equal(result.errorCode, 'OPTION_UNAVAILABLE');
 });
 
 test('conserve le restaurant source dans le panier', () => {

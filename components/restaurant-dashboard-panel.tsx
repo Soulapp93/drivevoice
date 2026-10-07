@@ -189,6 +189,7 @@ export function RestaurantDashboardPanel({ restaurantId }: DashboardProps) {
   const [orders, setOrders] = useState<DashboardOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [requiresLogin, setRequiresLogin] = useState(false);
   const [ordersOpen, setOrdersOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
   const [dashboardPeriod, setDashboardPeriod] = useState('Aujourd’hui');
@@ -199,6 +200,9 @@ export function RestaurantDashboardPanel({ restaurantId }: DashboardProps) {
     const controller = new AbortController();
 
     const loadOrders = async () => {
+      setLoadError('');
+      setRequiresLogin(false);
+      setLoading(true);
       if (!supabase) {
         setLoadError('La connexion à Supabase n’est pas disponible.');
         setLoading(false);
@@ -206,8 +210,15 @@ export function RestaurantDashboardPanel({ restaurantId }: DashboardProps) {
       }
       const { data, error } = await supabase.auth.getSession();
       if (!active) return;
-      if (error || !data.session) {
-        setLoadError('Connectez-vous pour consulter les commandes réelles.');
+      if (error) {
+        setLoadError('Impossible de vérifier votre session DriveVoice. Reconnectez-vous.');
+        setRequiresLogin(true);
+        setLoading(false);
+        return;
+      }
+      if (!data.session) {
+        setLoadError('Aucune session DriveVoice active. La connexion à HubRise ne remplace pas la connexion à votre compte DriveVoice.');
+        setRequiresLogin(true);
         setLoading(false);
         return;
       }
@@ -219,7 +230,10 @@ export function RestaurantDashboardPanel({ restaurantId }: DashboardProps) {
           signal: controller.signal,
         });
         const result = await response.json() as { orders?: Array<Record<string, unknown>>; error?: string };
-        if (!response.ok) throw new Error(result.error || 'Impossible de charger les commandes réelles.');
+        if (!response.ok) {
+          if (response.status === 401) setRequiresLogin(true);
+          throw new Error(result.error || 'Impossible de charger les commandes réelles.');
+        }
         if (active) setOrders((result.orders ?? []).map(toDashboardOrder));
       } catch (error) {
         if (active && !(error instanceof DOMException && error.name === 'AbortError')) {
@@ -300,7 +314,7 @@ export function RestaurantDashboardPanel({ restaurantId }: DashboardProps) {
           <button onClick={exportOrders} disabled={loading || Boolean(loadError)} className="rounded-xl bg-[#0b1f14] px-4 py-2 text-xs font-black text-white transition hover:bg-[#173b27] disabled:cursor-not-allowed disabled:opacity-50">Exporter CSV</button>
         </div>
       </div>
-      {loadError && <div role="alert" className="mb-5 rounded-2xl border border-[#f2c9bf] bg-[#fff4f0] px-5 py-4 text-sm font-semibold text-[#a13e29]">{loadError}</div>}
+      {loadError && <div role="alert" className="mb-5 rounded-2xl border border-[#f2c9bf] bg-[#fff4f0] px-5 py-4 text-sm font-semibold text-[#a13e29]">{loadError}{requiresLogin && <a href="/login" className="ml-2 inline-block font-black underline underline-offset-4">Se connecter à DriveVoice</a>}</div>}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[
           ['Commandes', loading ? '…' : String(filteredOrders.length), 'Sur la période sélectionnée', '◉'],

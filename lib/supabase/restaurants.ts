@@ -223,6 +223,49 @@ export async function updateRestaurantProduct(
   }
 }
 
+export interface RestaurantProductUpsertInput {
+  productId: string;
+  name: string;
+  category: string;
+  price: number;
+  available: boolean;
+  displayOrder?: number;
+  data: Record<string, unknown>;
+}
+
+export async function upsertRestaurantProduct(restaurantId: string, product: RestaurantProductUpsertInput): Promise<SyncResult> {
+  if (!isSupabaseConfigured || !supabase) return { ok: false, error: 'Supabase non configuré' };
+  try {
+    const { error } = await supabase.from('restaurant_products').upsert({
+      restaurant_id: restaurantId,
+      product_id: product.productId,
+      name: product.name,
+      category: product.category,
+      price: product.price,
+      available: product.available,
+      display_order: product.displayOrder ?? 0,
+      data: product.data,
+    }, { onConflict: 'restaurant_id,product_id' });
+    if (error) throw error;
+    return { ok: true };
+  } catch (err: unknown) {
+    console.error('[upsertRestaurantProduct]', err);
+    return { ok: false, error: errorMessage(err, 'Erreur lors de la sauvegarde du produit') };
+  }
+}
+
+export async function deleteRestaurantProduct(restaurantId: string, productId: string): Promise<SyncResult> {
+  if (!isSupabaseConfigured || !supabase) return { ok: false, error: 'Supabase non configuré' };
+  try {
+    const { error } = await supabase.from('restaurant_products').delete().eq('restaurant_id', restaurantId).eq('product_id', productId);
+    if (error) throw error;
+    return { ok: true };
+  } catch (err: unknown) {
+    console.error('[deleteRestaurantProduct]', err);
+    return { ok: false, error: errorMessage(err, 'Erreur lors de la suppression du produit') };
+  }
+}
+
 export async function deleteRestaurant(restaurantId: string): Promise<SyncResult> {
   if (!isSupabaseConfigured || !supabase) return { ok: false, error: 'Supabase non configuré' };
   try {

@@ -30,10 +30,10 @@ export async function GET(request: Request) {
   const oauthError = url.searchParams.get('error');
 
   if (oauthError) {
-    return redirectWith(url, `/?tab=technical&hubrise=error&reason=${encodeURIComponent(oauthError)}`);
+    return redirectWith(url, `/restaurant?tab=technical&hubrise=error&reason=${encodeURIComponent(oauthError)}`);
   }
   if (!code || !state) {
-    return redirectWith(url, '/?tab=technical&hubrise=error&reason=missing_params');
+    return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=missing_params');
   }
 
   try {
@@ -44,11 +44,11 @@ export async function GET(request: Request) {
     });
     const edgeData = await edgeResponse.json().catch(() => ({})) as { success?: boolean; restaurantId?: string; error?: string };
     if (!edgeResponse.ok || !edgeData.success) {
-      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(edgeData.error || 'oauth_failed'));
+      return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent(edgeData.error || 'oauth_failed'));
     }
-    return redirectWith(url, `/?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(edgeData.restaurantId || '')}`);
+    return redirectWith(url, `/restaurant?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(edgeData.restaurantId || '')}`);
   } catch {
-    return redirectWith(url, '/?tab=technical&hubrise=error&reason=oauth_network_error');
+    return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=oauth_network_error');
   }
 
   const secrets = await getHubRiseSecrets(url.origin);
@@ -60,12 +60,12 @@ export async function GET(request: Request) {
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_SERVICE_ROLE_KEY || '';
 
   if (!clientId || !clientSecret || !stateSecret || !serviceRoleKey) {
-    return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent('Configuration OAuth serveur incomplète'));
+    return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent('Configuration OAuth serveur incomplète'));
   }
 
   const parsedState = verifyState(state!, stateSecret!);
   if (!parsedState) {
-    return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent('State invalide ou expiré, relancez la connexion'));
+    return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent('State invalide ou expiré, relancez la connexion'));
   }
 
   try {
@@ -84,13 +84,13 @@ export async function GET(request: Request) {
     if (!tokenRes.ok) {
       const errText = await tokenRes.text();
       console.error('[hubrise callback] token exchange failed:', errText);
-      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(`Échange de token échoué: ${errText.slice(0, 200)}`));
+      return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent(`Échange de token échoué: ${errText.slice(0, 200)}`));
     }
 
     const tokens = await tokenRes.json() as { access_token?: string; refresh_token?: string; account_id?: string; location_id?: string; location_name?: string };
 
     if (!tokens.access_token) {
-      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent('Réponse HubRise sans access_token'));
+      return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent('Réponse HubRise sans access_token'));
     }
 
     const supabase = createClient(supabaseUrl, serviceRoleKey);
@@ -110,14 +110,14 @@ export async function GET(request: Request) {
     if (error) {
       const errorMessage = error?.message ?? 'Erreur Supabase inconnue';
       console.error('[hubrise callback] upsert error:', errorMessage);
-      return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(errorMessage));
+      return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent(errorMessage));
     }
 
-    return redirectWith(url, `/?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(parsedState!.restaurantId ?? '')}`);
+    return redirectWith(url, `/restaurant?tab=technical&hubrise=connected&restaurantId=${encodeURIComponent(parsedState!.restaurantId ?? '')}`);
   } catch {
     const msg = 'Erreur inconnue';
     console.error('[hubrise callback] unexpected error:', msg);
-    return redirectWith(url, '/?tab=technical&hubrise=error&reason=' + encodeURIComponent(msg.slice(0, 200)));
+    return redirectWith(url, '/restaurant?tab=technical&hubrise=error&reason=' + encodeURIComponent(msg.slice(0, 200)));
   }
 }
 
