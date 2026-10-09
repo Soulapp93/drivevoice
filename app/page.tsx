@@ -175,7 +175,7 @@ export default function HomePage() {
             <h1 className="text-[clamp(2.45rem,5.4vw,5rem)] font-extrabold leading-[.99] tracking-[-.065em] text-[#17392D]">La prise de commande au drive, <span className="text-[#F06445]">plus fluide grâce à la voix.</span></h1>
             <p className="mt-6 max-w-[510px] text-base leading-7 text-[#56695F] sm:text-lg sm:leading-8">Une solution vocale en temps réel, connectée au catalogue de votre restaurant et conçue pour accompagner vos équipes pendant le service.</p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-              <a href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white shadow-[0_12px_24px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337]">Voir une démonstration <Icon name="arrow" className="h-4 w-4" /></a>
+              <a href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white shadow-[0_12px_24px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337]">Demander une intégration <Icon name="arrow" className="h-4 w-4" /></a>
               <a href="#fonctionnement" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#dce4df] bg-white px-5 text-sm font-bold text-[#17392D] transition hover:border-[#F06445] hover:text-[#d95337]"><Icon name="play" className="h-4 w-4 text-[#F06445]" /> Voir le fonctionnement</a>
             </div>
             <div className="mt-8 grid gap-3 text-xs font-semibold text-[#53655C] sm:flex sm:flex-wrap sm:gap-x-5">
