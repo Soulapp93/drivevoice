@@ -141,7 +141,7 @@ export default function HomePage() {
   return (
     <main className="overflow-x-clip bg-white text-[#17392D]">
       <header className="sticky top-0 z-40 border-b border-[#e7ebe8] bg-white/95 shadow-[0_2px_12px_rgba(23,57,45,.035)] backdrop-blur-xl">
-        <div className="mx-auto flex min-h-[74px] max-w-[1320px] items-center justify-between gap-5 px-5 sm:px-8">
+        <div className="mx-auto flex min-h-[74px] max-w-[1320px] items-center justify-between gap-3 px-4 sm:gap-5 sm:px-8">
           <Brand />
           <nav aria-label="Navigation principale" className="hidden items-center gap-7 text-[13px] font-semibold text-[#53655C] lg:flex">
             <a href="#avantages" className="transition hover:text-[#E85D3D]">Avantages</a>
@@ -151,11 +151,11 @@ export default function HomePage() {
             <a href="#faq" className="transition hover:text-[#E85D3D]">FAQ</a>
           </nav>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <Link href="/login" className="hidden min-h-10 items-center rounded-xl border border-[#dce4df] px-4 text-sm font-bold text-[#17392D] transition hover:border-[#17392D] sm:inline-flex">Se connecter</Link>
-            <Link href="/demo-request" className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#F06445] px-3.5 text-xs font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:px-4 sm:text-sm">Voir une démo <Icon name="arrow" className="h-4 w-4" /></Link>
+            <Link href="/login" className="inline-flex min-h-10 items-center rounded-xl border border-[#dce4df] px-2.5 text-[11px] font-bold text-[#17392D] transition hover:border-[#17392D] sm:px-4 sm:text-sm">Se connecter</Link>
+            <Link href="/demo-request" className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#F06445] px-2.5 text-[11px] font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:gap-2 sm:px-4 sm:text-sm">Voir une démo <Icon name="arrow" className="h-4 w-4" /></Link>
           </div>
         </div>
-        <nav aria-label="Navigation mobile" className="flex gap-5 overflow-x-auto border-t border-[#eef0ed] px-5 py-2.5 text-xs font-semibold text-[#53655C] lg:hidden sm:px-8">
+        <nav aria-label="Navigation mobile" className="flex flex-wrap justify-center gap-x-5 gap-y-2 border-t border-[#eef0ed] px-4 py-2.5 text-[11px] font-semibold text-[#53655C] lg:hidden sm:px-8 sm:text-xs">
           <a href="#avantages" className="whitespace-nowrap">Avantages</a>
           <a href="#fonctionnement" className="whitespace-nowrap">Fonctionnement</a>
           <a href="#integrations" className="whitespace-nowrap">Intégrations</a>
@@ -166,19 +166,19 @@ export default function HomePage() {
 
       <section className="relative isolate overflow-hidden bg-[#fbfcfa]">
         <div aria-hidden="true" className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_5%_20%,rgba(226,237,229,.55),transparent_42%)]" />
-        <div className="mx-auto grid max-w-[1320px] items-center gap-9 px-5 py-12 sm:px-8 sm:py-16 lg:min-h-[580px] lg:grid-cols-[.87fr_1.13fr] lg:gap-10 lg:py-12">
+        <div className="mx-auto grid max-w-[1320px] items-center gap-8 px-4 py-10 sm:gap-9 sm:px-8 sm:py-16 lg:min-h-[580px] lg:grid-cols-[.87fr_1.13fr] lg:gap-10 lg:py-12">
           <div className="relative z-10 max-w-[590px]">
             <p className="mb-5 inline-flex items-center gap-2 rounded-full border border-[#dfe8e2] bg-white px-3.5 py-2 text-xs font-bold text-[#53655C] shadow-sm">
               <span className="h-2 w-2 rounded-full bg-[#F06445]" />
               La commande au drive, autrement
             </p>
-            <h1 className="text-[clamp(2.7rem,5.4vw,5rem)] font-extrabold leading-[.99] tracking-[-.065em] text-[#17392D]">La prise de commande au drive, <span className="text-[#F06445]">plus fluide grâce à la voix.</span></h1>
+            <h1 className="text-[clamp(2.45rem,5.4vw,5rem)] font-extrabold leading-[.99] tracking-[-.065em] text-[#17392D]">La prise de commande au drive, <span className="text-[#F06445]">plus fluide grâce à la voix.</span></h1>
             <p className="mt-6 max-w-[510px] text-base leading-7 text-[#56695F] sm:text-lg sm:leading-8">Une solution vocale en temps réel, connectée au catalogue de votre restaurant et conçue pour accompagner vos équipes pendant le service.</p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
               <Link href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white shadow-[0_12px_24px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337]">Voir une démonstration <Icon name="arrow" className="h-4 w-4" /></Link>
               <a href="#fonctionnement" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#dce4df] bg-white px-5 text-sm font-bold text-[#17392D] transition hover:border-[#F06445] hover:text-[#d95337]"><Icon name="play" className="h-4 w-4 text-[#F06445]" /> Voir le fonctionnement</a>
             </div>
-            <div className="mt-8 flex flex-wrap gap-x-5 gap-y-3 text-xs font-semibold text-[#53655C]">
+            <div className="mt-8 grid gap-3 text-xs font-semibold text-[#53655C] sm:flex sm:flex-wrap sm:gap-x-5">
               <span className="inline-flex items-center gap-2"><Icon name="clock" className="h-4 w-4 text-[#E85D3D]" /> Commande en temps réel</span>
               <span className="inline-flex items-center gap-2"><Icon name="shield" className="h-4 w-4 text-[#E85D3D]" /> Catalogue connecté</span>
               <span className="inline-flex items-center gap-2"><Icon name="link" className="h-4 w-4 text-[#E85D3D]" /> POS et outils compatibles</span>
@@ -358,7 +358,7 @@ export default function HomePage() {
       </section>
 
       <footer className="border-t border-[#e5eae6] bg-[#fbfcfa]">
-        <div className="mx-auto flex max-w-[1320px] flex-col gap-6 px-5 py-7 sm:px-8 md:flex-row md:items-center md:justify-between">
+        <div className="mx-auto flex max-w-[1320px] flex-col gap-6 px-4 py-7 sm:px-8 md:flex-row md:items-center md:justify-between">
           <div><Brand /><p className="mt-2 text-xs text-[#738078]">La commande au drive, plus fluide grâce à la voix.</p></div>
           <nav aria-label="Navigation de pied de page" className="flex flex-wrap gap-x-5 gap-y-3 text-xs font-semibold text-[#53655C]"><a href="#avantages" className="hover:text-[#E85D3D]">Avantages</a><a href="#fonctionnement" className="hover:text-[#E85D3D]">Fonctionnement</a><a href="#integrations" className="hover:text-[#E85D3D]">Intégrations</a><a href="#securite" className="hover:text-[#E85D3D]">Sécurité</a><a href="#faq" className="hover:text-[#E85D3D]">FAQ</a></nav>
           <Link href="/login" className="inline-flex min-h-10 w-fit items-center gap-2 rounded-xl bg-[#F06445] px-4 text-xs font-bold text-white transition hover:bg-[#d95337]">Se connecter <Icon name="arrow" className="h-4 w-4" /></Link>
