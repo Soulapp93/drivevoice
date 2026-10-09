@@ -104,11 +104,11 @@ export default function LoginPage() {
             ) : (
               <>
                 <p className="text-xs font-black uppercase tracking-widest text-[#8a958d]">Se connecter</p>
-                <h2 className="mt-2 text-2xl font-black">Se connecter avec son mot de passe</h2>
+                <h2 className="mt-2 text-2xl font-black">{authMode === 'admin' ? 'Connexion administrateur' : authMode === 'restaurant' ? 'Connexion restaurant' : 'Se connecter avec son mot de passe'}</h2>
                 <form onSubmit={signIn} className="mt-6 space-y-4">
                   <label className="block text-xs font-black text-[#68736a]">
                     E-mail professionnel
-                    <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" placeholder="vous@restaurant.fr" />
+                    <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" placeholder={authMode === 'admin' ? 'admin@drivevoice.ai' : 'vous@restaurant.fr'} />
                   </label>
                   <label className="block text-xs font-black text-[#68736a]">
                     Mot de passe
@@ -120,14 +120,23 @@ export default function LoginPage() {
             )}
             {notice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{notice}</p>}
             <div className="my-7 flex items-center gap-3 text-[10px] font-black uppercase tracking-widest text-[#a0aaa2]">
-              <span className="h-px flex-1 bg-[#e7ebe5]" />Accès plateforme<span className="h-px flex-1 bg-[#e7ebe5]" />
+              <span className="h-px flex-1 bg-[#e7ebe5]" />{authMode === 'admin' ? 'Autre accès' : authMode === 'restaurant' ? 'Autre accès' : 'Accès plateforme'}<span className="h-px flex-1 bg-[#e7ebe5]" />
             </div>
             <div className="grid gap-3">
-              <button onClick={() => router.push('/login?mode=admin')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
-                <span className="text-[10px] font-black uppercase tracking-widest text-[#7b8b81]">Compte plateforme</span>
-                <p className="mt-2 text-sm font-black text-[#132018]">Administrateur DriveVoice</p>
-                <p className="mt-1 text-xs text-[#7d8980]">Connexion administrateur sécurisée</p>
-              </button>
+              {authMode !== 'admin' && (
+                <button onClick={() => router.push('/login?mode=admin')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#7b8b81]">Compte plateforme</span>
+                  <p className="mt-2 text-sm font-black text-[#132018]">Administrateur DriveVoice</p>
+                  <p className="mt-1 text-xs text-[#7d8980]">Connexion administrateur sécurisée</p>
+                </button>
+              )}
+              {authMode !== 'restaurant' && (
+                <button onClick={() => router.push('/login?mode=restaurant')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-[#7b8b81]">Compte restaurant</span>
+                  <p className="mt-2 text-sm font-black text-[#132018]">Espace restaurant</p>
+                  <p className="mt-1 text-xs text-[#7d8980]">Accès aux commandes, catalogue et compte</p>
+                </button>
+              )}
             </div>
           </section>
         </div>
