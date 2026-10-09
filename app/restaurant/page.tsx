@@ -12,6 +12,7 @@ import { applyUpdateOrder, buildRealtimeToolDefinitions, createIdempotencyKey, j
 import { logRealtimeEvent } from '@/lib/realtime/logging';
 import { OrderWorkspace as VoiceOrderWorkspace } from '@/components/voice/order-workspace';
 import { RestaurantDashboardPanel } from '@/components/restaurant-dashboard-panel';
+import { SupportPanel } from '@/components/support-panel';
 
 const RESPONSE_INACTIVITY_TIMEOUT_MS = 15_000;
 const RESPONSE_MAX_DURATION_MS = 45_000;
@@ -94,7 +95,6 @@ declare global {
 }
 
 const brands = [
-  { name: 'Burger King', mark: 'BK', color: '#e32725', ink: '#fff' },
   { name: "McDonald's", mark: 'M', color: '#ffcc00', ink: '#1d1d1b' },
   { name: 'Quick', mark: 'Q', color: '#e31c3d', ink: '#fff' },
   { name: 'KFC', mark: 'K', color: '#e4002b', ink: '#fff' },
@@ -122,11 +122,11 @@ function OrderWorkspace({ products, agentWelcome, agentRules, restaurantName, re
   );
 }
 
-type WorkspaceTab = 'order' | 'dashboard' | 'integrations' | 'catalog' | 'agent' | 'account';
+type WorkspaceTab = 'order' | 'dashboard' | 'integrations' | 'catalog' | 'agent' | 'account' | 'support';
 type ProductVariant = { id: number; name: string; priceDelta: number; posCode: string };
 type ProductOption = { id: number; name: string; priceDelta: number; priceDeltaBySize?: Partial<Record<string, number>>; posCode: string; available: boolean; availableFor?: string[]; imageUrl?: string; productId?: string; detail?: string };
 type ProductGroupRule = { required: boolean; min: number; max: number };
-type ProductOptionGroup = { id: number; name: string; question: string; required: boolean; min: number; max: number; rulesBySize?: Partial<Record<string, ProductGroupRule>>; options: ProductOption[] };
+type ProductOptionGroup = { id: number; name: string; question: string; required: boolean; min: number; max: number; sizeScope?: string; rulesBySize?: Partial<Record<string, ProductGroupRule>>; options: ProductOption[] };
 type ProductModifier = { id: number; name: string; kind: 'remove' | 'add'; priceDelta: number };
 type ProductIngredient = { id: number; name: string; removable: boolean; extraAllowed: boolean; extraPrice: number };
 type ProductNutrition = { calories: string; fat: string; saturatedFat: string; proteins: string; carbohydrates: string; sugars: string; salt: string };
@@ -160,7 +160,6 @@ type CatalogProduct = {
 };
 
 const demoRestaurantId = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-const burgerKingDemoRestaurantId = '31065664-a449-4fe3-a311-de880b436726';
 const demoRestaurantName = 'La Piazza République';
 
 function mapRestaurantProduct(product: RestaurantProductInfo, index: number): CatalogProduct {
@@ -189,6 +188,7 @@ function mapRestaurantProduct(product: RestaurantProductInfo, index: number): Ca
         required: Boolean(groupRecord.required),
         min: Number(groupRecord.min ?? 0),
         max: Number(groupRecord.max ?? 1),
+        sizeScope: typeof groupRecord.sizeScope === 'string' ? groupRecord.sizeScope : undefined,
         rulesBySize,
         options: rawOptions.map((option, optionIndex) => {
           const optionRecord = isRecord(option) ? option : {};
@@ -263,651 +263,15 @@ const workspaceTabs: Array<{ id: WorkspaceTab; label: string; short: string; ico
   { id: 'catalog', label: 'Catalogue produits', short: 'CATALOGUE', icon: '▦' },
   { id: 'agent', label: 'Configuration assistant vocal', short: 'ASSISTANT', icon: '✦' },
   { id: 'account', label: 'Compte restaurant', short: 'COMPTE', icon: '◎' },
+  { id: 'support', label: 'Messagerie support', short: 'SUPPORT', icon: '◉' },
 ];
 
 const restrictedTabsForManager: WorkspaceTab[] = ['integrations', 'catalog', 'agent'];
 const restrictedTabsForOperateur: WorkspaceTab[] = ['integrations', 'catalog', 'agent', 'account'];
 
-const burgerKingCategoryTemplate = [
-  ['Nouveautés', '✦'], ['Menus', '▤'], ['Burgers', '🍔'], ['Menus enfants', '♛'], ['À partager', '🍗'],
-  ['Tortillas & Wraps', '🌯'], ['Snacks & Sauces', '🍟'], ['Bon et Pas Cher', '€'], ['Salades', '🥗'],
-  ['Desserts & Boissons', '🥤'], ['King Breakfast', '☀'], ['Poulet du Dimanche', '🍗'],
-] as const;
+const subcategoryTemplates: Record<string, string[]> = {};
 
-const subcategoryTemplates: Record<string, string[]> = {
-  'Burgers': ['Tous', 'Poulet', 'Bœuf', 'Poisson', 'Veggie'],
-  'Menus': ['Tous', 'Poulet', 'Bœuf', 'Poisson', 'Veggie'],
-  'À partager': ['Tous', 'Krispper Tenders', 'Kingbox', 'Baby Burgers'],
-  'Tortillas & Wraps': ['Tous', 'King Tortillas', 'King Wraps'],
-  'Snacks & Sauces': ['Tous', 'Krispper Tenders', 'King Nuggets', 'Frites & Gaufrettes', 'Chili Cheese', 'Onion Rings', 'Sauces', 'King Fries'],
-  'Bon et Pas Cher': ['Tous'],
-  'Salades': ['Tous', 'Poulet', 'Veggie', 'Sauces Classiques', 'Autres'],
-  'Desserts & Boissons': ['Tous', 'Glaces', 'Pâtisseries', 'Boissons froides', 'Boissons chaudes', 'Autres'],
-  'King Breakfast': ['Tous', 'Pâtisseries', 'Autres'],
-  'Poulet du Dimanche': ['Tous'],
-};
-
-const bkDrinks = [
-  'Coca-Cola® (25cl)', 'Coca-Cola® (40cl)', 'Coca-Cola® (50cl)',
-  'Coca-Cola Zéro Sucres® (25cl)', 'Coca-Cola Zéro Sucres® (40cl)', 'Coca-Cola Zéro Sucres® (50cl)',
-  'Coca-Cola® Cherry Zéro Sucres (25cl)', 'Coca-Cola® Cherry Zéro Sucres (40cl)', 'Coca-Cola® Cherry Zéro Sucres (50cl)',
-  'Fanta® Goût Original sans sucres (25cl)', 'Fanta® Goût Original sans sucres (40cl)', 'Fanta® Goût Original sans sucres (50cl)',
-  'Oasis Tropical (25cl)', 'Oasis Tropical (40cl)', 'Oasis Tropical (50cl)',
-  'Fuze Tea Pêche Hibiscus (25cl)', 'Fuze Tea Pêche Hibiscus (40cl)', 'Fuze Tea Pêche Hibiscus (50cl)',
-  'Vittel® (33cl)', 'Vittel® (50cl)', 'Perrier® (33cl)',
-  'Jus de Pomme C’est qui le Patron ?! (20CL)', 'Red Bull Energy Drink (25cl)',
-];
-const bkSaucePrices: Record<string, number> = {
-  'Sauce Ketchup': 0.2,
-  'Sauce pour les frites': 0.2,
-  'Sauce Barbecue': 0.4,
-  'Sauce Moutarde Miel': 0.4,
-  'Sauce Smoky Bacon Flavor': 0.4,
-  'Spicy Andalouse': 0.4,
-  'Sauce 1954': 0.4,
-  'Sauce Creamy Ranch': 0.4,
-  'Sauce Chili goût Cheese': 0.4,
-  'Sauce Balsamique': 0.6,
-  'Sauce Caesar': 0.6,
-  'Sauce Cheddar XXL': 1.9,
-  'Pack de 6 sauces': 1.9,
-};
-const bkSauces = Object.keys(bkSaucePrices);
-const sizeAliases: Record<string, string[]> = {
-  Medium: ['Medium', 'M'],
-  'King Size': ['King Size', 'King', 'L', 'XL'],
-  Extra: ['Extra', 'XXL', 'XL'],
-};
-const sizeMatches = (availableFor: string[] | undefined, selectedSize: string) => !availableFor || availableFor.some(size => (sizeAliases[selectedSize] ?? [selectedSize]).some(alias => alias.toLowerCase() === size.toLowerCase()));
-const priceForSize = (option: ProductOption | undefined, selectedSize: string) => {
-  if (!option) return 0;
-  const aliases = sizeAliases[selectedSize] ?? [selectedSize];
-  const sizePrice = option.priceDeltaBySize && Object.entries(option.priceDeltaBySize).find(([size]) => aliases.some(alias => alias.toLowerCase() === size.toLowerCase()))?.[1];
-  return sizePrice ?? option.priceDelta;
-};
-const menuSizeSurcharge = (menuName: string, selectedSize: string) => {
-  if (selectedSize === 'Medium' || selectedSize === 'M') return 0;
-  if (/x10/i.test(menuName)) return selectedSize === 'King Size' || selectedSize === 'L' ? 1.9 : 5;
-  return selectedSize === 'King Size' || selectedSize === 'L' ? 0.95 : 2.5;
-};
-const drinkSizes = (name: string): string[] => {
-  if (/25cl/i.test(name)) return [];
-  if (/33cl|40cl|20CL/i.test(name)) return ['Medium'];
-  if (/50cl/i.test(name)) return ['King Size', 'Extra'];
-  return ['Medium', 'King Size', 'Extra'];
-};
-const bkOptions = (base: number, style: 'burger' | 'crispy' | 'kids' = 'burger', menuName = ''): ProductOptionGroup[] => {
-  const drinks = bkDrinks.map((name, index) => ({
-    id: base * 100 + 30 + index,
-    name,
-    priceDelta: /^Red Bull/i.test(name) ? 1.5 : 0,
-    priceDeltaBySize: /^Red Bull/i.test(name) ? { Extra: 0 } : undefined,
-    posCode: '',
-    available: true,
-    availableFor: /^Red Bull/i.test(name) ? ['Medium', 'King Size', 'Extra'] : drinkSizes(name),
-  }));
-  const sides = [
-    ['Moyennes frites', ['Medium'], 0],
-    ['Grandes frites', ['King Size'], 0],
-    ['Onion Rings (6)', ['Medium'], 0],
-    ['Onion Rings (9)', ['King Size'], 0],
-    ['King Fries Cheddar & Bacon', ['Medium', 'King Size', 'Extra'], 1.55],
-    ['King Fries Cheddar & Crispy Onions', ['Medium', 'King Size', 'Extra'], 1.55],
-    ['King Fries Double Cheddar', ['Medium', 'King Size', 'Extra'], 1.55],
-    ['King Carotte', ['Medium', 'King Size'], 0],
-    ['Petite salade', ['Medium', 'King Size'], 0],
-    ['Moyenne Gaufrette Frites', ['Medium'], 0],
-    ['Grande Gaufrette Frites', ['King Size'], 0],
-  ].map(([name, availableFor, priceDelta], index) => ({ id: base * 100 + 20 + index, name: String(name), priceDelta: Number(priceDelta), priceDeltaBySize: Number(priceDelta) ? { Extra: 0 } : undefined, posCode: '', available: true, availableFor: availableFor as string[] }));
-  if (style === 'kids') {
-    return [
-      { id: base * 10 + 1, name: 'Plat', question: 'Quel plat pour l’enfant ?', required: true, min: 1, max: 1, options: ['Mini burger de bœuf', 'Mini burger au poulet', 'Nuggets (4)'].map((name, index) => ({ id: base * 100 + index, name, priceDelta: 0, posCode: '', available: true })) },
-      { id: base * 10 + 2, name: 'Accompagnement', question: 'Quel accompagnement ?', required: true, min: 1, max: 1, options: ['Petites frites', 'Pom’Potes®'].map((name, index) => ({ id: base * 100 + 10 + index, name, priceDelta: 0, posCode: '', available: true })) },
-      { id: base * 10 + 3, name: 'Boisson', question: 'Quelle boisson ?', required: true, min: 1, max: 1, options: ['Jus de Pomme (20cl)', 'Coca-Cola® (25cl)', 'Coca-Cola® Zéro Sucres (25cl)', 'Vittel® (33cl)'].map((name, index) => ({ id: base * 100 + 20 + index, name, priceDelta: 0, posCode: '', available: true })) },
-      { id: base * 10 + 4, name: 'Dessert ou jouet', question: 'Un dessert ou un jouet ?', required: true, min: 1, max: 1, options: ['Dessert du moment', 'Jouet'].map((name, index) => ({ id: base * 100 + 40 + index, name, priceDelta: 0, posCode: '', available: true })) },
-    ];
-  }
-  if (style === 'crispy') {
-    return [
-      { id: base * 10 + 1, name: 'Taille du menu', question: 'Quelle taille de menu souhaitez-vous ?', required: true, min: 1, max: 1, options: [{ name: 'Medium', priceDelta: 0 }, { name: 'King Size', priceDelta: menuName.includes('x10') ? 1.9 : 0.95 }, { name: 'Extra', priceDelta: menuName.includes('x10') ? 5 : 2.5 }].map((item, index) => ({ id: base * 100 + index, ...item, posCode: '', available: true })) },
-      { id: base * 10 + 2, name: 'Accompagnement', question: 'Quel accompagnement souhaitez-vous ?', required: true, min: 1, max: 1, options: sides },
-      { id: base * 10 + 3, name: 'Boisson', question: 'Quelle boisson souhaitez-vous ?', required: true, min: 1, max: 1, options: drinks },
-      { id: base * 10 + 4, name: 'Sauce', question: 'Quelle sauce souhaitez-vous ?', required: true, min: 1, max: 2, options: bkSauces.map((name, index) => ({ id: base * 100 + 50 + index, name, priceDelta: bkSaucePrices[name], posCode: '', available: true })) },
-    ];
-  }
-  return [
-    { id: base * 10 + 1, name: 'Taille du menu', question: 'Quelle taille de menu souhaitez-vous ?', required: true, min: 1, max: 1, options: [{ name: 'Medium', priceDelta: 0 }, { name: 'King Size', priceDelta: 0.95 }, { name: 'Extra', priceDelta: 2.5 }].map((item, index) => ({ id: base * 100 + index, ...item, posCode: '', available: true })) },
-    { id: base * 10 + 2, name: 'Accompagnement', question: 'Quel accompagnement souhaitez-vous ?', required: true, min: 1, max: 1, options: sides },
-    { id: base * 10 + 3, name: 'Boisson', question: 'Quelle boisson souhaitez-vous ?', required: true, min: 1, max: 1, options: drinks },
-    { id: base * 10 + 4, name: 'Sauces', question: 'Une sauce pour accompagner ?', required: false, min: 0, max: 2, options: bkSauces.map((name, index) => ({ id: base * 100 + 60 + index, name, priceDelta: bkSaucePrices[name], posCode: '', available: true })) },
-  ];
-};
-
-type BkSeed = [string, string, string, number, string, string, 'simple' | 'configurable' | 'menu' | 'bundle', ('burger' | 'crispy' | 'kids')?];
-const bkSeed: BkSeed[] = [
-  ['Master des Chefs', 'Nouveautés', '', 11.5, 'Burger de la gamme Masters des Chefs', '🍔', 'configurable'],
-  ['Master Sarran Mozzarella', 'Nouveautés', '', 11.5, 'Burger au poulet et mozzarella de la gamme Masters', '🍔', 'configurable'],
-  ['Master Pairet Poivre', 'Nouveautés', '', 11.5, 'Burger de la gamme Masters, note poivrée', '🍔', 'configurable'],
-  ['King Fusion des Chefs', 'Nouveautés', '', 4.3, 'Dessert glacé King Fusion en édition des Chefs', '🍨', 'simple'],
-  ['Red Bull Energy Drink (25cl)', 'Nouveautés', '', 3.9, 'Boisson énergisante Red Bull 25cl', '🥤', 'simple'],
-  ['Master Sarran Mozzarella', 'Menus', 'Poulet', 13.9, 'Master Sarran Mozzarella, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['CBK', 'Menus', 'Poulet', 10.9, 'CBK, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Double CBK', 'Menus', 'Poulet', 12.9, 'Double CBK, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Smoky Chicken', 'Menus', 'Poulet', 8.5, 'Smoky Chicken, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Menu Krispper Tenders x10', 'Menus', 'Poulet', 19.9, '10 Krispper Tenders, accompagnement, boisson et sauces', '🍗', 'menu', 'crispy'],
-  ['Menu Krispper Tenders x5', 'Menus', 'Poulet', 9.95, '5 Krispper Tenders, accompagnement, boisson et sauce', '🍗', 'menu', 'crispy'],
-  ['Chicken Louisiane Steakhouse', 'Menus', 'Poulet', 9.9, 'Chicken Louisiane Steakhouse, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Menu King Nuggets (10)', 'Menus', 'Poulet', 8.9, '10 King Nuggets, accompagnement, boisson et sauce', '🍗', 'menu', 'crispy'],
-  ['Menu King Nuggets (7)', 'Menus', 'Poulet', 7.9, '7 King Nuggets, accompagnement, boisson et sauce', '🍗', 'menu', 'crispy'],
-  ['Tortilla Cheese & Bacon', 'Menus', 'Poulet', 7.9, 'Tortilla Cheese & Bacon, accompagnement et boisson au choix', '🌯', 'menu', 'burger'],
-  ['Wrap Chicken Louisiane', 'Menus', 'Poulet', 9.4, 'Wrap Chicken Louisiane, accompagnement et boisson au choix', '🌯', 'menu', 'burger'],
-  ['Master des Chefs', 'Menus', 'Bœuf', 13.9, 'Master des Chefs, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Master Pairet Poivre', 'Menus', 'Bœuf', 13.9, 'Master Pairet Poivre, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Big King®', 'Menus', 'Bœuf', 7.9, 'Big King®, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Whopper®', 'Menus', 'Bœuf', 8.9, 'Whopper®, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Steakhouse', 'Menus', 'Bœuf', 9.9, 'Steakhouse, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Double Whopper® Cheese', 'Menus', 'Bœuf', 11.7, 'Double Whopper® Cheese, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Double Cheese Bacon XXL', 'Menus', 'Bœuf', 12, 'Double Cheese Bacon XXL, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Big King XXL', 'Menus', 'Bœuf', 11.3, 'Big King XXL, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Double Steakhouse', 'Menus', 'Bœuf', 12.2, 'Double Steakhouse, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Double Cheese Bacon', 'Menus', 'Bœuf', 8.2, 'Double Cheese Bacon, accompagnement et boisson au choix', '🍔', 'menu', 'burger'],
-  ['Big Fish', 'Menus', 'Poisson', 7.9, 'Big Fish, accompagnement et boisson au choix', '🐟', 'menu', 'burger'],
-  ['Veggie Chicken Louisiane Steakhouse', 'Menus', 'Veggie', 9.9, 'Version végétarienne, accompagnement et boisson au choix', '🌱', 'menu', 'burger'],
-  ['Tortilla Veggie Cheese & Bacon', 'Menus', 'Veggie', 7.9, 'Version végétarienne, accompagnement et boisson au choix', '🌯', 'menu', 'burger'],
-  ['Veggie Whopper', 'Menus', 'Veggie', 8.9, 'Veggie Whopper, accompagnement et boisson au choix', '🌱', 'menu', 'burger'],
-  ['Veggie Steakhouse', 'Menus', 'Veggie', 9.9, 'Veggie Steakhouse, accompagnement et boisson au choix', '🌱', 'menu', 'burger'],
-  ['Wrap Veggie Chicken Louisiane', 'Menus', 'Veggie', 9.4, 'Version végétarienne, accompagnement et boisson au choix', '🌯', 'menu', 'burger'],
-  ['Master Sarran Mozzarella', 'Burgers', 'Poulet', 11.5, 'Poulet croustillant et mozzarella, gamme Masters', '🍔', 'configurable'],
-  ['CBK', 'Burgers', 'Poulet', 8.4, 'Burger au poulet croustillant CBK', '🍔', 'configurable'],
-  ['Double CBK', 'Burgers', 'Poulet', 10.4, 'Deux filets de poulet croustillants', '🍔', 'configurable'],
-  ['Smoky Chicken', 'Burgers', 'Poulet', 6, 'Poulet croustillant, note fumée', '🍔', 'configurable'],
-  ['Chicken Louisiane Steakhouse', 'Burgers', 'Poulet', 7.5, 'Poulet croustillant façon Louisiane', '🍔', 'configurable'],
-  ['Wrap Chicken Louisiane', 'Burgers', 'Poulet', 5.7, 'Wrap au poulet croustillant façon Louisiane', '🌯', 'configurable'],
-  ['Tortilla Cheese & Bacon', 'Burgers', 'Poulet', 4.9, 'Tortilla au poulet, fromage et bacon', '🌯', 'configurable'],
-  ['Master des Chefs', 'Burgers', 'Bœuf', 11.5, 'Burger de la gamme Masters des Chefs', '🍔', 'configurable'],
-  ['Master Pairet Poivre', 'Burgers', 'Bœuf', 11.5, 'Burger de la gamme Masters, note poivrée', '🍔', 'configurable'],
-  ['Big King®', 'Burgers', 'Bœuf', 5.6, 'Deux viandes grillées à la flamme, cheddar et sauce Big King', '🍔', 'configurable'],
-  ['Whopper®', 'Burgers', 'Bœuf', 6.5, 'Viande de bœuf grillée à la flamme et légumes frais', '🍔', 'configurable'],
-  ['Double Cheese Bacon', 'Burgers', 'Bœuf', 5.8, 'Deux viandes, fromage et bacon', '🍔', 'configurable'],
-  ['Double Whopper® Cheese', 'Burgers', 'Bœuf', 9.2, 'Deux viandes grillées à la flamme, fromage et légumes frais', '🍔', 'configurable'],
-  ['Double Cheese Bacon XXL', 'Burgers', 'Bœuf', 9.6, 'Version XXL, deux viandes, fromage et bacon', '🍔', 'configurable'],
-  ['Big King XXL®', 'Burgers', 'Bœuf', 8.9, 'Version XXL du Big King, deux viandes et cheddar', '🍔', 'configurable'],
-  ['Steakhouse', 'Burgers', 'Bœuf', 7.5, 'Bœuf grillé à la flamme, cheddar et oignons croustillants', '🍔', 'configurable'],
-  ['Double Steakhouse', 'Burgers', 'Bœuf', 9.8, 'Deux viandes, cheddar et oignons croustillants', '🍔', 'configurable'],
-  ['Cheeseburger', 'Burgers', 'Bœuf', 2.95, 'Viande grillée à la flamme et fromage', '🍔', 'configurable'],
-  ['Hamburger', 'Burgers', 'Bœuf', 2.5, 'Viande grillée à la flamme, format classique', '🍔', 'configurable'],
-  ['Big Fish', 'Burgers', 'Poisson', 5.5, 'Poisson pané croustillant, sauce et salade', '🐟', 'configurable'],
-  ['Veggie Chicken Louisiane Steakhouse', 'Burgers', 'Veggie', 7.5, 'Alternative végétarienne du Chicken Louisiane', '🌱', 'configurable'],
-  ['Veggie Whopper®', 'Burgers', 'Veggie', 6.5, 'Alternative végétarienne du Whopper®', '🌱', 'configurable'],
-  ['Veggie Steakhouse', 'Burgers', 'Veggie', 7.5, 'Alternative végétarienne du Steakhouse', '🌱', 'configurable'],
-  ['Wrap Veggie Chicken Louisiane', 'Burgers', 'Veggie', 5.7, 'Wrap végétarien façon Louisiane', '🌯', 'configurable'],
-  ['Tortilla Veggie Cheese & Bacon', 'Burgers', 'Veggie', 4.9, 'Tortilla végétarienne, fromage et bacon végétal', '🌯', 'configurable'],
-  ['King Junior', 'Menus enfants', '', 4, 'Menu enfant 4-7 ans : plat, accompagnement, boisson et surprise', '♛', 'menu', 'kids'],
-  ['King JR +', 'Menus enfants', '', 5.5, 'Menu enfant complet avec plat, accompagnement, boisson et surprise', '♛', 'menu', 'kids'],
-  ['Menu Krispper Tenders x5', 'À partager', 'Krispper Tenders', 9.95, '5 Krispper Tenders, accompagnement, boisson et sauce', '🍗', 'menu', 'crispy'],
-  ['Menu Krispper Tenders x10', 'À partager', 'Krispper Tenders', 19.9, '10 Krispper Tenders, accompagnement, boisson et sauces', '🍗', 'menu', 'crispy'],
-  ['Krispper Tenders x2', 'À partager', 'Krispper Tenders', 3.95, '2 filets de poulet croustillants', '🍗', 'simple'],
-  ['Krispper Tenders x5', 'À partager', 'Krispper Tenders', 8.6, '5 filets de poulet croustillants', '🍗', 'simple'],
-  ['Krispper Tenders x10', 'À partager', 'Krispper Tenders', 17, '10 filets de poulet croustillants', '🍗', 'simple'],
-  ['Kingbox 10 King Nuggets® + 10 Chili Cheese', 'À partager', 'Kingbox', 10.5, '10 King Nuggets et 10 Chili Cheese à partager', '📦', 'bundle'],
-  ['Kingbox 10 Onion Rings + 10 King Nuggets®', 'À partager', 'Kingbox', 10.5, '10 Onion Rings et 10 King Nuggets à partager', '📦', 'bundle'],
-  ['Kingbox 10 Onion Rings + 10 Chili Cheese', 'À partager', 'Kingbox', 10.5, '10 Onion Rings et 10 Chili Cheese à partager', '📦', 'bundle'],
-  ['Kingbox 20 King Nuggets®', 'À partager', 'Kingbox', 10.5, '20 King Nuggets à partager', '📦', 'bundle'],
-  ['Menu Baby Burgers x3', 'À partager', 'Baby Burgers', 12.4, '3 baby burgers en menu, avec accompagnement et boisson', '🍔', 'menu', 'burger'],
-  ['Baby Burgers x3', 'À partager', 'Baby Burgers', 9.9, '3 mini burgers à partager', '🍔', 'bundle'],
-  ['Tortilla Cheese & Bacon', 'Tortillas & Wraps', 'King Tortillas', 4.9, 'Tortilla au poulet, fromage et bacon', '🌯', 'configurable'],
-  ['Tortilla Veggie Cheese & Bacon', 'Tortillas & Wraps', 'King Tortillas', 4.9, 'Tortilla végétarienne, fromage et bacon végétal', '🌯', 'configurable'],
-  ['Wrap Chicken Louisiane', 'Tortillas & Wraps', 'King Wraps', 5.7, 'Wrap au poulet croustillant façon Louisiane', '🌯', 'configurable'],
-  ['Wrap Veggie Chicken Louisiane', 'Tortillas & Wraps', 'King Wraps', 5.7, 'Wrap végétarien façon Louisiane', '🌯', 'configurable'],
-  ['King Nuggets® (4)', 'Snacks & Sauces', 'King Nuggets', 3.5, '4 nuggets de poulet', '🍗', 'simple'],
-  ['King Nuggets® (7)', 'Snacks & Sauces', 'King Nuggets', 5.3, '7 nuggets de poulet', '🍗', 'simple'],
-  ['King Nuggets® (10)', 'Snacks & Sauces', 'King Nuggets', 6.4, '10 nuggets de poulet', '🍗', 'simple'],
-  ['Petites frites', 'Snacks & Sauces', 'Frites & Gaufrettes', 2.75, 'Petite portion de frites croustillantes', '🍟', 'simple'],
-  ['Moyennes frites', 'Snacks & Sauces', 'Frites & Gaufrettes', 2.95, 'Moyenne portion de frites croustillantes', '🍟', 'simple'],
-  ['Grandes frites', 'Snacks & Sauces', 'Frites & Gaufrettes', 3.1, 'Grande portion de frites croustillantes', '🍟', 'simple'],
-  ['Chili Cheese (4)', 'Snacks & Sauces', 'Chili Cheese', 3.95, '4 bouchées panées au fromage', '🧀', 'simple'],
-  ['Chili Cheese (6)', 'Snacks & Sauces', 'Chili Cheese', 5.5, '6 bouchées panées au fromage', '🧀', 'simple'],
-  ['Chili Cheese (9)', 'Snacks & Sauces', 'Chili Cheese', 6.7, '9 bouchées panées au fromage', '🧀', 'simple'],
-  ['Onion Rings (4)', 'Snacks & Sauces', 'Onion Rings', 1.9, '4 rondelles d’oignon panées', '🧅', 'simple'],
-  ['Onion Rings (6)', 'Snacks & Sauces', 'Onion Rings', 2.75, '6 rondelles d’oignon panées', '🧅', 'simple'],
-  ['Onion Rings (9)', 'Snacks & Sauces', 'Onion Rings', 3.1, '9 rondelles d’oignon panées', '🧅', 'simple'],
-  ['Sauce Cheddar XXL', 'Snacks & Sauces', 'Sauces', 1.9, 'Grande portion de sauce cheddar', '🧀', 'simple'],
-  ['Sauce Smoky Bacon Flavor', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce goût bacon fumé', '🥫', 'simple'],
-  ['Sauce Moutarde Miel', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce moutarde et miel', '🥫', 'simple'],
-  ['Sauce Barbecue', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce barbecue fumée', '🥫', 'simple'],
-  ['Spicy Andalouse', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce andalouse relevée', '🥫', 'simple'],
-  ['Sauce 1954', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce signature Burger King', '🥫', 'simple'],
-  ['Sauce Creamy Ranch', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce ranch onctueuse', '🥫', 'simple'],
-  ['Sauce Chili goût Cheese', 'Snacks & Sauces', 'Sauces', 0.4, 'Sauce chili goût fromage', '🥫', 'simple'],
-  ['Sauce pour les frites', 'Snacks & Sauces', 'Sauces', 0.2, 'Sauce pour les frites', '🥫', 'simple'],
-  ['Sauce Ketchup', 'Snacks & Sauces', 'Sauces', 0.2, 'Ketchup', '🥫', 'simple'],
-  ['Sauce Balsamique', 'Snacks & Sauces', 'Sauces', 0.6, 'Sauce balsamique pour salades', '🥫', 'simple'],
-  ['Sauce Caesar', 'Snacks & Sauces', 'Sauces', 0.6, 'Sauce caesar pour salades', '🥫', 'simple'],
-  ['King Fries Cheddar & Bacon', 'Snacks & Sauces', 'King Fries', 3.95, 'Frites généreuses, cheddar et bacon', '🍟', 'simple'],
-  ['King Fries Cheddar & Crispy Onions', 'Snacks & Sauces', 'King Fries', 3.95, 'Frites généreuses, cheddar et oignons croustillants', '🍟', 'simple'],
-  ['King Fries Double Cheddar', 'Snacks & Sauces', 'King Fries', 3.95, 'Frites généreuses et double cheddar', '🍟', 'simple'],
-  ['Sauce Balsamique', 'Salades', '', 0.6, 'Sauce balsamique pour salades', '🥗', 'simple'],
-  ['Sauce Caesar', 'Salades', '', 0.6, 'Sauce caesar pour salades', '🥗', 'simple'],
-  ['Extra King Fusion Dubaï Style', 'Desserts & Boissons', 'Glaces', 5.2, 'Glace vanille, nappages pistache et chocolat, éclats de gaufrettes et deux barres Kit Kat®', '🍨', 'simple'],
-  ["King Fusion M&M's®", 'Desserts & Boissons', 'Glaces', 3.95, 'Glace vanille, nappage chocolat et éclats de M&M’s® cacahuète', '🍨', 'simple'],
-  ['King Fusion Snickers®', 'Desserts & Boissons', 'Glaces', 3.95, 'Glace vanille, nappage caramel, éclats de cacahuète et de SNICKERS®', '🍨', 'simple'],
-  ['King Fusion Dubaï Style', 'Desserts & Boissons', 'Glaces', 4.3, 'Glace vanille, nappages pistache et chocolat, éclats de gaufrettes et gaufrettes chocolatées KitKat®', '🍨', 'simple'],
-  ['King Sundae Vanille', 'Desserts & Boissons', 'Glaces', 2.95, 'Onctueuse glace saveur vanille', '🍨', 'simple'],
-  ['King Sundae Chocolat', 'Desserts & Boissons', 'Glaces', 2.95, 'Glace saveur vanille avec nappage chocolat et pointe de sel', '🍨', 'simple'],
-  ['King Sundae Caramel', 'Desserts & Boissons', 'Glaces', 2.95, 'Glace saveur vanille avec nappage caramel et pointe de sel', '🍨', 'simple'],
-  ['Red Bull Energy Drink (25cl)', 'Desserts & Boissons', 'Boissons froides', 3.9, 'Boisson énergisante Red Bull 25cl', '🥤', 'simple'],
-  ['Coca-Cola® Cherry Zéro Sucres (25cl)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Coca-Cola® Cherry zéro sucres, saveur cerise, 25cl', '🥤', 'simple'],
-  ['Coca-Cola® Cherry Zéro Sucres (40cl)', 'Desserts & Boissons', 'Boissons froides', 3, 'Coca-Cola® Cherry zéro sucres, saveur cerise, 40cl', '🥤', 'simple'],
-  ['Coca-Cola® Cherry Zéro Sucres (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.4, 'Coca-Cola® Cherry zéro sucres, saveur cerise, 50cl', '🥤', 'simple'],
-  ['Coca-Cola Zéro Sucres® (25cl)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Coca-Cola Zéro Sucres format 25cl', '🥤', 'simple'],
-  ['Coca-Cola Zéro Sucres® (40cl)', 'Desserts & Boissons', 'Boissons froides', 3, 'Coca-Cola Zéro Sucres format 40cl', '🥤', 'simple'],
-  ['Coca-Cola Zéro Sucres® (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.4, 'Coca-Cola Zéro Sucres format 50cl', '🥤', 'simple'],
-  ['Fanta® Goût Original sans sucres (25cl)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Fanta sans sucres format 25cl', '🥤', 'simple'],
-  ['Fanta® Goût Original sans sucres (40cl)', 'Desserts & Boissons', 'Boissons froides', 3, 'Fanta sans sucres format 40cl', '🥤', 'simple'],
-  ['Fanta® Goût Original sans sucres (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.4, 'Fanta sans sucres format 50cl', '🥤', 'simple'],
-  ['Vittel® (33cl)', 'Desserts & Boissons', 'Boissons froides', 2.7, 'Eau minérale Vittel 33cl', '💧', 'simple'],
-  ['Vittel® (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.1, 'Eau minérale Vittel 50cl', '💧', 'simple'],
-  ['Perrier® (33cl)', 'Desserts & Boissons', 'Boissons froides', 2.7, 'Eau pétillante Perrier 33cl', '💧', 'simple'],
-  ['Coca-Cola® (25cl)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Coca-Cola format 25cl', '🥤', 'simple'],
-  ['Coca-Cola® (40cl)', 'Desserts & Boissons', 'Boissons froides', 3, 'Coca-Cola format 40cl', '🥤', 'simple'],
-  ['Coca-Cola® (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.4, 'Coca-Cola format 50cl', '🥤', 'simple'],
-  ['Oasis Tropical (25cl)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Oasis Tropical format 25cl', '🥤', 'simple'],
-  ['Oasis Tropical (40cl)', 'Desserts & Boissons', 'Boissons froides', 3, 'Oasis Tropical format 40cl', '🥤', 'simple'],
-  ['Oasis Tropical (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.4, 'Oasis Tropical format 50cl', '🥤', 'simple'],
-  ['Fuze Tea Pêche Hibiscus (25cl)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Fusion rafraîchissante de saveurs pêche et hibiscus, 25cl', '🥤', 'simple'],
-  ['Fuze Tea Pêche Hibiscus (40cl)', 'Desserts & Boissons', 'Boissons froides', 3, 'Fusion rafraîchissante de saveurs pêche et hibiscus, 40cl', '🥤', 'simple'],
-  ['Fuze Tea Pêche Hibiscus (50cl)', 'Desserts & Boissons', 'Boissons froides', 3.4, 'Fusion rafraîchissante de saveurs pêche et hibiscus, 50cl', '🥤', 'simple'],
-  ['Jus de Pomme C’est qui le Patron ?! (20CL)', 'Desserts & Boissons', 'Boissons froides', 2.4, 'Jus de pomme 20cl', '🧃', 'simple'],
-  ['Expresso', 'Desserts & Boissons', 'Boissons chaudes', 1.4, 'Expresso', '☕', 'simple'],
-  ['Café allongé', 'Desserts & Boissons', 'Boissons chaudes', 1.8, 'Café allongé', '☕', 'simple'],
-  ['Cappuccino', 'Desserts & Boissons', 'Boissons chaudes', 2.3, 'Cappuccino', '☕', 'simple'],
-  ['Café Latté', 'Desserts & Boissons', 'Boissons chaudes', 2.3, 'Café latté au lait C’est qui le Patron ?!®', '☕', 'simple'],
-  ['Double expresso', 'Desserts & Boissons', 'Boissons chaudes', 2.1, 'Double expresso', '☕', 'simple'],
-  ['Thé vert menthe', 'Desserts & Boissons', 'Boissons chaudes', 2.1, 'Thé vert à la menthe', '🍵', 'simple'],
-  ['Thé Earl Grey', 'Desserts & Boissons', 'Boissons chaudes', 2.1, 'Thé Earl Grey', '🍵', 'simple'],
-  ['Boisson Cacaotée', 'Desserts & Boissons', 'Boissons chaudes', 2.2, 'Boisson cacaotée avec du lait C’est qui le Patron ?!®', '☕', 'simple'],
-  ["Pom'Potes® Pomme", 'Desserts & Boissons', 'Autres', 1.9, 'Gourde de fruits sans sucres ajoutés', '🍏', 'simple'],
-  ['King Yaourt', 'Desserts & Boissons', 'Autres', 1.9, 'Yaourt à boire à l’arôme naturel de fraise', '🍓', 'simple'],
-  ['King Fruits', 'Desserts & Boissons', 'Autres', 2, 'Quartiers de fruits de saison', '🍎', 'simple'],
-  ['Kingbox 10 King Nuggets® + 10 Chili Cheese', 'Offres du moment', 'Kingbox', 10.5, '10 King Nuggets et 10 Chili Cheese à partager', '📦', 'bundle'],
-  ['Kingbox 10 Onion Rings + 10 Chili Cheese', 'À partager', 'Kingbox', 10.5, '10 Onion Rings et 10 Chili Cheese à partager', '📦', 'bundle'],
-  ['Kingbox 20 King Nuggets®', 'À partager', 'Kingbox', 10.5, '20 King Nuggets à partager', '📦', 'bundle'],
-  ['Menu Bon et Pas Cher Duo', 'Bon et Pas Cher', '', 9.9, 'Un menu Bon et Pas Cher à composer à deux', '🍔', 'menu', 'burger'],
-  ['Menu Bon et Pas Cher Classique', 'Bon et Pas Cher', '', 6.9, 'Un menu Bon et Pas Cher avec accompagnement et boisson', '🍔', 'menu', 'burger'],
-  ['Menu Bon et Pas Cher +', 'Bon et Pas Cher', '', 8.9, 'Un menu Bon et Pas Cher généreux avec accompagnement et boisson', '🍔', 'menu', 'burger'],
-  ['Caesar Chicken Bowl', 'Salades', 'Poulet', 9.9, 'Bowl Caesar au poulet croustillant, salade et sauce Caesar', '🥗', 'menu', 'burger'],
-  ['Caesar Chicken Bowl', 'Salades', 'Poulet', 7.9, 'Bowl Caesar au poulet croustillant', '🥗', 'simple'],
-  ['Veggie Caesar Chicken Bowl', 'Salades', 'Veggie', 7.9, 'Bowl Caesar en version végétarienne', '🥗', 'menu', 'burger'],
-  ['Petite salade', 'Salades', 'Veggie', 3.5, 'Petite salade fraîche', '🥗', 'simple'],
-  ['King Carotte', 'Salades', 'Veggie', 2.9, 'Bâtonnets de carotte croquants', '🥕', 'simple'],
-  ['Sauce balsamique tomates', 'Salades', 'Autres', 0.6, 'Sauce balsamique aux tomates', '🥫', 'simple'],
-  ['Donut Chocolat Noisette', 'King Breakfast', 'Pâtisseries', 2.2, 'Donut gourmand au chocolat et à la noisette', '🍩', 'simple'],
-  ['Muffin Chocolat Noisette', 'King Breakfast', 'Pâtisseries', 2.5, 'Muffin moelleux au chocolat et à la noisette', '🧁', 'simple'],
-  ['Bacon & Cheese', 'King Breakfast', 'Autres', 5.9, 'Bacon, fromage et pain moelleux', '🥓', 'simple'],
-  ['Box pour 4 - Nuggets / Tenders / Smoky Chicken', 'Poulet du Dimanche', '', 39.8, 'Une box généreuse pour 4 personnes', '🍗', 'bundle'],
-  ['Box pour 2 - Nuggets / Tenders / Smoky Chicken', 'Poulet du Dimanche', '', 19.9, 'Une box généreuse pour 2 personnes', '🍗', 'bundle'],
-  ['Box pour 2 - Nuggets / Smoky Chicken', 'Poulet du Dimanche', '', 19.9, 'Une box pour 2 avec nuggets et Smoky Chicken', '🍗', 'bundle'],
-  ['Red Bull Mûre Givrée & Vanille (25cl)', 'Desserts & Boissons', 'Boissons froides', 3.9, 'Boisson énergisante Red Bull saveur mûre givrée et vanille', '🥤', 'simple'],
-];
-
-const bkOfficialImages: Record<string, string> = {
-  'Master des Chefs': 'https://medias.burgerking.fr/_prd/img/products/3/83/383a3e25-9e15-4032-9aa6-41cd43fc83f2_',
-  'Master Sarran Mozzarella': 'https://medias.burgerking.fr/_prd/img/products/a/0e/a0e7c77c-9407-46e3-9c8d-e477f5e79140_',
-  'Master Pairet Poivre': 'https://medias.burgerking.fr/_prd/img/products/3/94/394d0df5-d99c-4ce0-89d3-9664e3511352_',
-  'King Fusion des Chefs': 'https://medias.burgerking.fr/_prd/img/products/a/b0/ab04ec22-882f-4ecd-b316-08e948ea3601_',
-  'Red Bull Energy Drink (25cl)': 'https://medias.burgerking.fr/_prd/img/products/c/2b/c2bb8ddc-97b8-4b15-b191-650363e54f7d_',
-  'CBK': 'https://medias.burgerking.fr/_prd/img/products/7/70/7707b4e5-501f-4401-a0c7-6587cc1b0723_',
-  'Double CBK': 'https://medias.burgerking.fr/_prd/img/products/5/3b/53b5bdd4-5999-48c1-a846-9a957a6de811_',
-  'Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/products/9/0a/90ada2c7-8126-42da-a8da-6beadbdc84f2_',
-  'Chicken Louisiane Steakhouse': 'https://medias.burgerking.fr/_prd/img/products/8/b8/8b8a3387-bfb8-4842-ab16-e36815abe882_',
-  'Big King®': 'https://medias.burgerking.fr/_prd/img/products/0/95/095c4404-c84a-4b22-b805-e37840f56927_',
-  'Big King XXL': 'https://medias.burgerking.fr/_prd/img/products/4/ff/4ff723fd-ab65-4d10-8b16-0d1301204753_',
-  'Whopper®': 'https://medias.burgerking.fr/_prd/img/products/f/f4/ff4e30d8-7602-47ef-aac0-64db980b7063_',
-  'Double Whopper® Cheese': 'https://medias.burgerking.fr/_prd/img/products/1/0e/10ecf4e5-b8cc-4ba7-bcec-d9e6d29dd9cf_',
-  'Double Cheese Bacon': 'https://medias.burgerking.fr/_prd/img/products/c/54/c548eb72-06ba-4845-b354-f2b798c876a1_',
-  'Double Cheese Bacon XXL': 'https://medias.burgerking.fr/_prd/img/products/9/d5/9d5dfdb4-1aa4-417d-a800-2a036700d61f_',
-  'Steakhouse': 'https://medias.burgerking.fr/_prd/img/products/8/b8/8b8a3387-bfb8-4842-ab16-e36815abe882_',
-  'Double Steakhouse': 'https://medias.burgerking.fr/_prd/img/products/b/d1/bd115879-25ba-46a8-8eff-418439fe7f4b_',
-  'Cheeseburger': 'https://medias.burgerking.fr/_prd/img/products/2/a0/2a08fd38-efe4-4c17-b008-5ce56be0833a_',
-  'Hamburger': 'https://medias.burgerking.fr/_prd/img/products/2/a0/2a08fd38-efe4-4c17-b008-5ce56be0833a_',
-  'Big Fish': 'https://medias.burgerking.fr/_prd/img/products/c/50/c50b1730-993f-4869-8222-01d3a47f597e_',
-  'Veggie Whopper®': 'https://medias.burgerking.fr/_prd/img/products/6/d6/6d6df3c3-a852-4567-9fd7-027d2a70c917_',
-  'Veggie Steakhouse': 'https://medias.burgerking.fr/_prd/img/products/8/f2/8f24a4f0-33d2-438e-8d1d-22cca6e0e2db_',
-  'Veggie Chicken Louisiane Steakhouse': 'https://medias.burgerking.fr/_prd/img/products/3/3e/33e82960-24f5-42bc-a679-847421fca159_',
-  'Wrap Chicken Louisiane': 'https://medias.burgerking.fr/_prd/img/products/d/13/d131fd59-9f98-46a9-a6c0-eca7585b80a7_',
-  'Wrap Veggie Chicken Louisiane': 'https://medias.burgerking.fr/_prd/img/products/c/88/c881d6db-3e00-4a71-a6bf-8cc3d34830ca_',
-  'Tortilla Cheese & Bacon': 'https://medias.burgerking.fr/_prd/img/products/e/20/e201795e-14ee-406a-b409-c03f7e4cc391_',
-  'Tortilla Veggie Cheese & Bacon': 'https://medias.burgerking.fr/_prd/img/products/d/0e/d0e35fc0-b5a5-4666-95a6-4a6f79ab75a7_',
-  'King Nuggets® (4)': 'https://medias.burgerking.fr/_prd/img/products/3/6d/36d123fa-5923-4dfb-9693-de4891351edf_',
-  'King Nuggets® (7)': 'https://medias.burgerking.fr/_prd/img/products/2/9f/29f4d11a-2152-4231-ab5f-1dde36119fa5_',
-  'King Nuggets® (10)': 'https://medias.burgerking.fr/_prd/img/products/3/6d/36d123fa-5923-4dfb-9693-de4891351edf_',
-  'Krispper Tenders x2': 'https://medias.burgerking.fr/_prd/img/products/0/fd/0fd97ca5-16e2-408c-b9f0-f26a9772ed0b_',
-  'Krispper Tenders x5': 'https://medias.burgerking.fr/_prd/img/products/4/17/417ba9f3-7c69-49ff-a123-26992066cd2f_',
-  'Krispper Tenders x10': 'https://medias.burgerking.fr/_prd/img/products/6/6d/66d03ab6-22c4-4185-8755-1136f53330c8_',
-  'Sauce Smoky Bacon Flavor': 'https://medias.burgerking.fr/_prd/img/products/2/dd/2dd3b286-e570-450e-86c2-5ce5a2ec387f_',
-  'Sauce Creamy Ranch': 'https://medias.burgerking.fr/_prd/img/products/a/d4/ad4d24b8-ad81-4943-be73-502344c73c0c_',
-  'Sauce Cheddar XXL': 'https://medias.burgerking.fr/_prd/img/products/9/1a/91a36f17-3c32-4ea5-9252-71ec5c449854_',
-  'King Fries Double Cheddar': 'https://medias.burgerking.fr/_prd/img/products/6/a7/6a7d85a3-b2ac-410b-a9da-22dffa72ace1_',
-  'King Fusion': 'https://medias.burgerking.fr/_prd/img/products/7/da/7da7ed83-9bac-45f3-8707-fb63afe0fe9c_',
-  'King Sundae': 'https://medias.burgerking.fr/_prd/img/products/3/a7/3a7c2f49-4ddf-41d3-bda7-7c653118b079_',
-  'King Yaourt': 'https://medias.burgerking.fr/_prd/img/products/f/f1/ff126d4c-b88b-42f7-890c-866f2673710d_',
-  'Perrier® (33cl)': 'https://medias.burgerking.fr/_prd/img/products/a/f7/af750d93-241e-4be1-af2c-816576645f43_',
-  'Oasis Tropical (25cl)': 'https://medias.burgerking.fr/_prd/img/products/8/8e/88e62700-4673-4a18-b5be-e81dd535a4f0_',
-  'Oasis Tropical (40cl)': 'https://medias.burgerking.fr/_prd/img/products/9/7f/97f3962a-e9a4-4a02-8f27-dad0b3cbaed0_',
-  'Oasis Tropical (50cl)': 'https://medias.burgerking.fr/_prd/img/products/d/da/dda47f96-e9a0-41c2-8589-a18e90607454_',
-  'Jus de Pomme C’est qui le Patron ?! (20CL)': 'https://medias.burgerking.fr/_prd/img/products/e/dd/edd885eb-5bc9-45df-ac78-62a8ee67bf58_',
-  'T-shirt K2000': 'https://medias.burgerking.fr/_prd/img/products/e/30/e30b2880-5511-4d8e-a618-364c64a88b7a_',
-  'Mug Charmed': 'https://medias.burgerking.fr/_prd/img/products/4/f3/4f358fab-59d8-4088-9a45-c1be852a6fa9_',
-};
-
-Object.assign(bkOfficialImages, {
-  'Red Bull Mûre Givrée & Vanille (25cl)': 'https://medias.burgerking.fr/_prd/img/products/c/68/c68237e6-523b-49f0-a3de-688ad0f607ab_',
-  'Caesar Chicken Bowl': 'https://medias.burgerking.fr/_prd/img/products/5/f3/5f34d025-5374-44f9-affb-f7409c6a350c_',
-  'Petite salade': 'https://medias.burgerking.fr/_prd/img/products/1/bc/1bc59fbd-6651-45d0-9035-48ed80e41644_',
-  'King Carotte': 'https://medias.burgerking.fr/_prd/img/products/d/48/d4807df5-3d95-4d63-9e01-7c62ba50695f_',
-  'Sauce balsamique tomates': 'https://medias.burgerking.fr/_prd/img/products/1/18/118a0455-6145-448c-8727-454c92a7bee5_',
-  'Donut Chocolat Noisette': 'https://medias.burgerking.fr/_prd/img/products/b/47/b47a0f8c-181b-4eed-a7b6-a0d933df4cf9_',
-  'Muffin Chocolat Noisette': 'https://medias.burgerking.fr/_prd/img/products/a/06/a06167de-fc69-48f0-95a1-1bb3b63d2243_',
-  'Bacon & Cheese': 'https://medias.burgerking.fr/_prd/img/products/e/cf/ecf7f0a2-0f12-4e04-8e29-ccbdb1c8130f_',
-  'Big King XXL®': 'https://medias.burgerking.fr/_prd/img/products/4/ff/4ff723fd-ab65-4d10-8b16-0d1301204753_',
-  'Veggie Whopper': 'https://medias.burgerking.fr/_prd/img/products/6/d6/6d6df3c3-a852-4567-9fd7-027d2a70c917_',
-  'Kingbox 10 King Nuggets® + 10 Chili Cheese': 'https://medias.burgerking.fr/_prd/img/products/9/de/9dea7277-61c2-4bc2-a6b8-fe654cea3cc0_',
-  'Kingbox 10 Onion Rings + 10 King Nuggets®': 'https://medias.burgerking.fr/_prd/img/products/3/e0/3e0172a3-dddc-4bdf-a0d7-edda5ea75783_',
-  'Kingbox 10 Onion Rings + 10 Chili Cheese': 'https://medias.burgerking.fr/_prd/img/products/a/ba/aba832d0-2431-4f24-89f3-dac94d877ae5_',
-  'Kingbox 20 King Nuggets®': 'https://medias.burgerking.fr/_prd/img/products/6/94/6944696a-b0a3-4ba1-b313-59fb21690adb_',
-  'Baby Whopper®': 'https://medias.burgerking.fr/_prd/img/products/6/40/640026a9-da1a-4a2e-9ecd-9c81a4cf5a9e_',
-  'Baby Big King®': 'https://medias.burgerking.fr/_prd/img/products/7/f1/7f1a6d54-e7aa-474e-a28c-b76a2eaf27a6_',
-  'Baby Chicken Louisiane': 'https://medias.burgerking.fr/_prd/img/products/8/e2/8e288ad1-e9a7-45b7-9f88-dbcf252f90de_',
-  'Baby Burgers x3': 'https://medias.burgerking.fr/_prd/img/menu/e869961c-2c59-4344-8287-e8fffcd6571e_',
-  'Menu Baby Burgers x3': 'https://medias.burgerking.fr/_prd/img/menu/ac14434f-d524-4dfe-9b69-7a79ee58abd3_',
-  'Petites frites': 'https://medias.burgerking.fr/_prd/img/products/2/b6/2b60d99b-07ec-4eea-8c2e-2edf7a60e5ac_',
-  'Moyennes frites': 'https://medias.burgerking.fr/_prd/img/products/8/83/88348035-d147-4e80-9508-f17276748056_',
-  'Grandes frites': 'https://medias.burgerking.fr/_prd/img/products/c/5e/c5ef2528-be6a-46f9-9262-273386a97de8_',
-  'Sauce pour les frites': 'https://medias.burgerking.fr/_prd/img/products/7/de/7de936fb-1d18-421d-8209-5c98aeb1550c_',
-  'Spicy Andalouse': 'https://medias.burgerking.fr/_prd/img/products/4/75/4752d28e-4ef5-4c6f-af29-73facad82ae7_',
-  "King Fusion M&M's®": 'https://medias.burgerking.fr/_prd/img/products/7/da/7da7ed83-9bac-45f3-8707-fb63afe0fe9c_',
-  'King Fusion Snickers®': 'https://medias.burgerking.fr/_prd/img/products/3/2d/32d60f23-cb2a-4ec7-8577-78b644b3d136_',
-  'King Fusion Dubaï Style': 'https://medias.burgerking.fr/_prd/img/products/3/5c/35c65115-453a-4687-bac8-6d9b0bfb48b9_',
-  'Extra King Fusion Dubaï Style': 'https://medias.burgerking.fr/_prd/img/products/a/aa/aaa1c9f6-c7ea-41c3-8534-4b78a300729b_',
-  'King Sundae Vanille': 'https://medias.burgerking.fr/_prd/img/products/3/a7/3a7c2f49-4ddf-41d3-bda7-7c653118b079_',
-  'King Sundae Chocolat': 'https://medias.burgerking.fr/_prd/img/products/f/d0/fd068bb4-b2ee-4fda-8288-cb0ca26cf88d_',
-  'King Sundae Caramel': 'https://medias.burgerking.fr/_prd/img/products/4/dc/4dc2792d-c3db-4e2c-888c-2b57c23058ef_',
-  'Coca-Cola® Cherry Zéro Sucres (25cl)': 'https://medias.burgerking.fr/_prd/img/products/b/35/b35a6551-069a-4637-9666-a3c8a0d62b7e_',
-  'Coca-Cola® Cherry Zéro Sucres (40cl)': 'https://medias.burgerking.fr/_prd/img/products/6/7e/67e1f133-2b16-4a54-957c-9d73c8af4b86_',
-  'Coca-Cola® Cherry Zéro Sucres (50cl)': 'https://medias.burgerking.fr/_prd/img/products/f/e7/fe794228-5bd1-493c-9a57-ac537588915b_',
-  'Fuze Tea Pêche Hibiscus (25cl)': 'https://medias.burgerking.fr/_prd/img/products/6/0f/60f7159c-1b06-4884-895d-39b2fa47796d_',
-  'Fuze Tea Pêche Hibiscus (40cl)': 'https://medias.burgerking.fr/_prd/img/products/2/ee/2ee8f845-91d6-4e6f-8b2a-24b2fedf13dd_',
-  'Fuze Tea Pêche Hibiscus (50cl)': 'https://medias.burgerking.fr/_prd/img/products/b/fa/bfa92b89-d0ba-4f1a-b80c-c930dbb1238c_',
-  'Expresso': 'https://medias.burgerking.fr/_prd/img/products/6/c6/6c6fbe3b-9fe9-4fac-81c0-5191849fbe59_',
-  'Café allongé': 'https://medias.burgerking.fr/_prd/img/products/f/23/f238509b-b811-4fb8-adb2-977cfa250c36_',
-  'Café Latté': 'https://medias.burgerking.fr/_prd/img/products/4/eb/4ebc743a-50cc-497c-8599-48fa0c3ecbdb_',
-  'Cappuccino': 'https://medias.burgerking.fr/_prd/img/products/9/7a/97a4bc4c-8145-41db-9ff1-2f627366db62_',
-  'Double expresso': 'https://medias.burgerking.fr/_prd/img/products/e/28/e28ca9c1-6850-4fa3-90d9-049b7ba8bb94_',
-  'Thé vert menthe': 'https://medias.burgerking.fr/_prd/img/products/6/bc/6bcf26f8-3764-48e0-ae09-9f034ce6a67f_',
-  'Thé Earl Grey': 'https://medias.burgerking.fr/_prd/img/products/3/18/318c0015-e45c-47b1-82a3-dc2b12e28551_',
-  'Chili Cheese (4)': 'https://medias.burgerking.fr/_prd/img/products/9/51/95109ca5-1bc0-47a7-a19c-91ca2d0ec948_',
-  'Chili Cheese (6)': 'https://medias.burgerking.fr/_prd/img/products/1/fe/1feb8943-1f4b-4e6e-b4b2-a6e637bfab48_',
-  'Chili Cheese (9)': 'https://medias.burgerking.fr/_prd/img/products/f/75/f7552547-135b-449b-bc5a-65228a53b940_',
-  'Onion Rings (4)': 'https://medias.burgerking.fr/_prd/img/products/e/3f/e3fc35c3-3790-4d7a-9c9a-0936e92fe60b_',
-  'Onion Rings (6)': 'https://medias.burgerking.fr/_prd/img/products/4/6e/46e8906c-5d85-4f38-bff1-18d29bcbc526_',
-  'Onion Rings (9)': 'https://medias.burgerking.fr/_prd/img/products/2/91/291f86e3-97ee-4897-877e-f6ef39dae360_',
-  'Sauce Barbecue': 'https://medias.burgerking.fr/_prd/img/products/4/bb/4bbe894d-60fd-451e-a603-0ea7fbb3b1d2_',
-  'Sauce Ketchup': 'https://medias.burgerking.fr/_prd/img/products/e/09/e099af94-b9cf-4732-98a5-3a798a3f35ed_',
-  'Sauce Balsamique': 'https://medias.burgerking.fr/_prd/img/products/5/01/5013149f-24b2-4ee2-919d-e006c4141e50_',
-  'Sauce Caesar': 'https://medias.burgerking.fr/_prd/img/products/8/93/8937d22c-1fe0-4eb4-9020-78468f8f5b11_',
-  'Sauce Chili goût Cheese': 'https://medias.burgerking.fr/_prd/img/products/9/c2/9c2bf558-e51a-4b9c-8e05-b8039fad04c2_',
-  'Sauce Moutarde Miel': 'https://medias.burgerking.fr/_prd/img/products/f/f4/ff45622d-f54f-4014-8e7f-b06f49ea4b0b_',
-  'King Fries Cheddar & Bacon': 'https://medias.burgerking.fr/_prd/img/products/6/d9/6d92ab7c-e386-4499-a71e-65cf00acd8af_',
-  'King Fries Cheddar & Crispy Onions': 'https://medias.burgerking.fr/_prd/img/products/0/5d/05d3732b-1af4-4809-9769-24f318860fdc_',
-  'Coca-Cola® (25cl)': 'https://medias.burgerking.fr/_prd/img/products/f/ca/fcaa4668-d34d-462e-8cd9-1743951ce739_',
-  'Coca-Cola® (40cl)': 'https://medias.burgerking.fr/_prd/img/products/e/0e/e0ee9abf-f32d-4ea4-b919-5d5cb6ebcccb_',
-  'Coca-Cola® (50cl)': 'https://medias.burgerking.fr/_prd/img/products/3/62/3629a705-afa8-4d7a-804d-51e3c3b9b6c1_',
-  'Coca-Cola Zéro Sucres® (25cl)': 'https://medias.burgerking.fr/_prd/img/products/5/a5/5a548543-7fae-4958-88ef-b435b362851f_',
-  'Coca-Cola Zéro Sucres® (40cl)': 'https://medias.burgerking.fr/_prd/img/products/9/b2/9b246f68-34ff-40d0-ba92-b7fa354390d3_',
-  'Coca-Cola Zéro Sucres® (50cl)': 'https://medias.burgerking.fr/_prd/img/products/a/ea/aea3e2f4-5e41-4cdc-b064-e187d6fbbaf5_',
-  'Fanta® Goût Original sans sucres (25cl)': 'https://medias.burgerking.fr/_prd/img/products/4/b1/4b15031f-1846-4796-aeb3-ff1ebe3d96c5_',
-  'Fanta® Goût Original sans sucres (40cl)': 'https://medias.burgerking.fr/_prd/img/products/0/cb/0cb4a6d9-bbfe-4e5c-afd1-88b6629e13a2_',
-  'Fanta® Goût Original sans sucres (50cl)': 'https://medias.burgerking.fr/_prd/img/products/0/e8/0e87a700-ba05-414c-b4f8-8b2165f42fc0_',
-  'Vittel® (33cl)': 'https://medias.burgerking.fr/_prd/img/products/2/3f/23f6964d-fb2a-4082-b510-64e9d5206826_',
-  'Vittel® (50cl)': 'https://medias.burgerking.fr/_prd/img/products/a/bd/abd88e13-e0d8-4244-92cc-1733edffc650_',
-  "Pom'Potes® Pomme": 'https://medias.burgerking.fr/_prd/img/products/c/be/cbec2ca6-81c9-4e73-9d21-468d4fb4e3ee_',
-  'King Fruits': 'https://medias.burgerking.fr/_prd/img/products/e/4b/e4b3c0ea-42fe-41e2-b721-2e343256cf85_',
-  'Boisson Cacaotée': 'https://medias.burgerking.fr/_prd/img/products/0/89/08903aa7-3ea3-4ef0-8949-e6ff3b7fa853_',
-});
-
-const bkOfficialMenuImages: Record<string, string> = {
-  'Menu Bon et Pas Cher Duo': 'https://medias.burgerking.fr/_prd/img/menu/8f82ee08-aea3-4f8f-9ff4-dd3bca3bf59d_',
-  'Menu Bon et Pas Cher Classique': 'https://medias.burgerking.fr/_prd/img/menu/c814c064-12cc-46a1-b655-9cdd636811fe_',
-  'Menu Bon et Pas Cher +': 'https://medias.burgerking.fr/_prd/img/menu/3cb4a31c-daf4-43a8-99e5-a907d89e8310_',
-  'Caesar Chicken Bowl': 'https://medias.burgerking.fr/_prd/img/menu/d577737c-d363-49ab-aab1-f6ddaf3b5536_',
-  'Veggie Caesar Chicken Bowl': 'https://medias.burgerking.fr/_prd/img/menu/751dbd38-63c0-4955-81bb-3fd322f288f8_',
-  'Box pour 4 - Nuggets / Tenders / Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/da117898-4075-440e-bdf3-f490d62681f2_',
-  'Box pour 2 - Nuggets / Tenders / Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/54e342b7-2450-45d9-864c-49757bb70673_',
-  'Box pour 2 - Nuggets / Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/6a75c2ce-54ad-4940-b4a3-447a1ae0eb6b_',
-  'Master des Chefs': 'https://medias.burgerking.fr/_prd/img/menu/7df3b3f5-d00b-4876-a11c-ad5285cdca72_',
-  'Master Sarran Mozzarella': 'https://medias.burgerking.fr/_prd/img/menu/85856066-4a51-4876-95a5-40921afdd3e9_',
-  'Master Pairet Poivre': 'https://medias.burgerking.fr/_prd/img/menu/e5953da4-e59a-459f-84b1-59b08a6e0526_',
-  'CBK': 'https://medias.burgerking.fr/_prd/img/menu/7d6af4c4-9931-4325-a7c3-83e358883ffc_',
-  'Double CBK': 'https://medias.burgerking.fr/_prd/img/menu/2902fc48-2615-42bc-9425-f7bb3b6cc393_',
-  'Smoky Chicken': 'https://medias.burgerking.fr/_prd/img/menu/7ccd861d-6965-4a7d-9b23-0c5de0a78d38_',
-  'Menu Krispper Tenders x10': 'https://medias.burgerking.fr/_prd/img/menu/f1691c1f-30ef-40ce-90e7-f5a57e2336af_',
-  'Menu Krispper Tenders x5': 'https://medias.burgerking.fr/_prd/img/menu/2b8128d7-d531-4fc4-9226-211df0896f35_',
-  'Chicken Louisiane Steakhouse': 'https://medias.burgerking.fr/_prd/img/menu/bd2ca9b4-fde2-49be-9748-91830a3b8512_',
-  'Menu King Nuggets (10)': 'https://medias.burgerking.fr/_prd/img/menu/29df3c61-108e-442b-aa45-98f5a79f628e_',
-  'Menu King Nuggets (7)': 'https://medias.burgerking.fr/_prd/img/menu/18c5943d-8bfa-461e-a5bb-31e49ed0c531_',
-  'Tortilla Cheese & Bacon': 'https://medias.burgerking.fr/_prd/img/menu/60983793-a2df-4e2a-98d2-e95c386b3b31_',
-  'Wrap Chicken Louisiane': 'https://medias.burgerking.fr/_prd/img/menu/3fb1f340-7cc9-44bf-88a6-bd5e0fd41eaa_',
-  'Big King®': 'https://medias.burgerking.fr/_prd/img/menu/c4596178-f626-4cc0-93a6-0e1f746e8b62_',
-  'Whopper®': 'https://medias.burgerking.fr/_prd/img/menu/92952978-c0d3-4545-b4a3-ffae2f09f74e_',
-  'Steakhouse': 'https://medias.burgerking.fr/_prd/img/menu/c98ab9c7-1df5-47eb-9723-15b99aa4b046_',
-  'Double Whopper® Cheese': 'https://medias.burgerking.fr/_prd/img/menu/e102c28f-a8a9-447a-b34f-f7964cd95cf3_',
-  'Double Cheese Bacon XXL': 'https://medias.burgerking.fr/_prd/img/menu/1f9f7d00-f845-415e-ae63-1c9489c9ca7e_',
-  'Big King XXL': 'https://medias.burgerking.fr/_prd/img/menu/f86b20c5-e201-4aaf-abd7-b63c0cdffa77_',
-  'Double Steakhouse': 'https://medias.burgerking.fr/_prd/img/menu/25073a15-0054-4ab1-8de5-3a97dcc052a6_',
-  'Double Cheese Bacon': 'https://medias.burgerking.fr/_prd/img/menu/91c18d86-4414-44be-ba8d-35bb64d5187f_',
-  'Big Fish': 'https://medias.burgerking.fr/_prd/img/menu/ca84fbab-ce6d-4dea-883d-94bdfeb50890_',
-  'Veggie Chicken Louisiane Steakhouse': 'https://medias.burgerking.fr/_prd/img/menu/21a52971-2ff6-44a1-b5b8-f431c5c08410_',
-  'Tortilla Veggie Cheese & Bacon': 'https://medias.burgerking.fr/_prd/img/menu/1c6405fb-15ac-4d5a-aeb1-ee490f5db1f2_',
-  'Veggie Whopper': 'https://medias.burgerking.fr/_prd/img/menu/0361dcc2-00e5-4959-a787-d1ccab633f33_',
-  'Veggie Steakhouse': 'https://medias.burgerking.fr/_prd/img/menu/141dc36f-c7bd-4288-a719-900a6ed68485_',
-  'Wrap Veggie Chicken Louisiane': 'https://medias.burgerking.fr/_prd/img/menu/dcaf616f-45f7-4ae2-af5a-86cdaf4f5e7a_',
-  'Menu Baby Burgers x3': 'https://medias.burgerking.fr/_prd/img/menu/ac14434f-d524-4dfe-9b69-7a79ee58abd3_',
-  'King Junior': 'https://medias.burgerking.fr/_prd/img/menu/96219f1b-0467-4737-87b4-bd0114175c56_',
-  'King JR +': 'https://medias.burgerking.fr/_prd/img/menu/281475f1-f8e9-4c23-ad9e-30802644239a_',
-};
-
-const burgerKingCatalogTemplate: CatalogProduct[] = bkSeed.map(([name, category, subcategory, price, detail, emoji, productType, menuStyle], index) => {
-  const id = 5000 + index;
-  const product: CatalogProduct = { id, productId: `bkfr_${index}`, name, detail, emoji, imageUrl: productType === 'menu' ? (bkOfficialMenuImages[name] ?? bkOfficialImages[name]) : bkOfficialImages[name], category, subcategory: subcategory || undefined, price, posCode: '', available: true, productType };
-  if (productType === 'menu') product.optionGroups = bkOptions(id, menuStyle ?? 'burger', name);
-  return product;
-});
-
-const burgerIngredientExtraPrices: Record<string, number> = {
-  'Bacon fumé (2 tranches)': 0.75,
-  'Bacon végétal LA VIE': 0.75,
-  'Cheddar fondu (1 tranche)': 0.75,
-  'Oignons croustillants': 0.4,
-  'Sauce épicée façon cajun': 0.3,
-};
-
-const configureBurger = (name: string, ingredients: string[], detail: string, idBase: number) => {
-  const products = burgerKingCatalogTemplate.filter(item => item.name === name && item.productType !== 'menu' && item.productType !== 'bundle');
-  products.forEach(product => {
-    product.detail = detail;
-    product.ingredients = ingredients;
-    product.ingredientSettings = ingredients.map((ingredient, index) => ({
-      id: idBase + index,
-      name: ingredient,
-      removable: !/pain|viande|poulet croustillant|pané végétal|haché végétal/i.test(ingredient),
-      extraAllowed: !/pain|viande|poulet croustillant|pané végétal|haché végétal|sauce/i.test(ingredient),
-      extraPrice: burgerIngredientExtraPrices[ingredient] ?? 0,
-    }));
-    product.modifiers = product.ingredientSettings.flatMap(ingredient => [
-      ...(ingredient.removable ? [{ id: ingredient.id * 10 + 1, name: `Sans ${ingredient.name}`, kind: 'remove' as const, priceDelta: 0 }] : []),
-      ...(ingredient.extraAllowed ? [{ id: ingredient.id * 10 + 2, name: `Supplément ${ingredient.name}`, kind: 'add' as const, priceDelta: ingredient.extraPrice }] : []),
-    ]);
-  });
-};
-
-configureBurger(
-  'Master des Chefs',
-  ['Pain brioché moelleux', 'Sauce inspiration chili aïoli', 'Roquette', 'Tranches de tomates fraîches', "Rondelles d’oignons frais", 'Sauce onctueuse à la graisse de canard', 'Chips de pommes de terre croustillantes', 'Épices merguez relevées', 'Viande grillée à la flamme', 'Sauce inspiration chili aïoli', 'Pain brioché moelleux'],
-  'Une viande de bœuf d’origine France grillée à la flamme, une sauce inspiration chili aïoli, de la roquette, des tomates et des oignons frais, une sauce onctueuse à la graisse de canard, des chips de pommes de terre croustillantes et des épices merguez relevées, dans un pain brioché moelleux.',
-  112900,
-);
-configureBurger(
-  'Master Sarran Mozzarella',
-  ['Pain aux quatre graines', 'Sauce basilic', 'Sauce olives et thym aux tomates séchées', 'Oignons croustillants', 'Mozzarella fior di latte', 'Poulet croustillant', 'Pain aux quatre graines'],
-  'Un poulet 100 % issu de filets enrobé d’une panure ultra croustillante, une sauce basilic, une sauce olives et thym avec une pointe de tomates séchées, une tranche de mozzarella fior di latte et des oignons croustillants, dans un pain aux quatre graines.',
-  112950,
-);
-configureBurger(
-  'Whopper®',
-  ['Pain aux graines de sésame', 'Sauce', 'Salade', 'Tranches de tomates fraîches', "Rondelles d’oignons frais", 'Ketchup', 'Rondelles de cornichons', 'Viande grillée à la flamme'],
-  'Une viande de bœuf grillée à la flamme, une sauce onctueuse, des tomates fraîches, une salade croquante, des cornichons et des oignons.',
-  114000,
-);
-configureBurger(
-  'Big King®',
-  ['Pain aux graines de sésame', 'Sauce Big King', 'Salade', "Rondelles d’oignons frais", 'Cheddar fondu (1 tranche)', 'Rondelles de cornichons', 'Viande grillée à la flamme', 'Cheddar fondu (1 tranche)', 'Viande grillée à la flamme', 'Pain aux graines de sésame'],
-  'Deux viandes de bœuf grillées à la flamme, de la sauce BIG KING® et des tranches de cheddar fondu.',
-  113000,
-);
-configureBurger(
-  'Big King XXL®',
-  ['Pain aux graines de sésame', 'Sauce Big King', 'Cheddar fondu (1 tranche)', 'Viande grillée à la flamme', 'Cheddar fondu (1 tranche)', 'Viande grillée à la flamme', 'Pain aux graines de sésame'],
-  'Deux viandes de bœuf grillées à la flamme, de la sauce BIG KING® et deux tranches de cheddar fondu.',
-  113100,
-);
-configureBurger(
-  'Double Whopper® Cheese',
-  ['Pain aux graines de sésame', 'Sauce', 'Salade', 'Tranches de tomates fraîches', "Rondelles d’oignons frais", 'Ketchup', 'Rondelles de cornichons', 'Cheddar fondu (1 tranche)', 'Viande grillée à la flamme', 'Viande grillée à la flamme'],
-  'Deux viandes de bœuf grillées à la flamme, des tranches de cheddar fondu et tous les ingrédients du WHOPPER®.',
-  113200,
-);
-configureBurger(
-  'Double Cheese Bacon',
-  ['Pain aux graines de sésame', 'Viande grillée à la flamme', 'Cheddar fondu (1 tranche)', 'Rondelles de cornichons', 'Bacon fumé (2 tranches)', 'Viande grillée à la flamme', 'Cheddar fondu (1 tranche)', 'Pain aux graines de sésame'],
-  'Deux viandes de bœuf grillées à la flamme, deux tranches de cheddar fondu, deux rondelles de cornichons et deux tranches de bacon.',
-  113300,
-);
-configureBurger(
-  'Double Cheese Bacon XXL',
-  ['Pain aux graines de sésame', 'Viande grillée à la flamme', 'Cheddar fondu (1 tranche)', 'Bacon fumé (2 tranches)', 'Viande grillée à la flamme', 'Cheddar fondu (1 tranche)', 'Pain aux graines de sésame'],
-  'Deux viandes de bœuf grillées à la flamme, des tranches de cheddar fondu et du bacon.',
-  113400,
-);
-configureBurger(
-  'Steakhouse',
-  ['Pain aux graines de sésame', 'Sauce Barbecue', 'Bacon fumé (2 tranches)', 'Cheddar fondu (1 tranche)', 'Oignons croustillants', 'Viande grillée à la flamme'],
-  'Une viande de bœuf grillée à la flamme, une sauce barbecue, du bacon, du cheddar fondu et des oignons croustillants.',
-  113500,
-);
-configureBurger(
-  'Double Steakhouse',
-  ['Pain aux graines de sésame', 'Sauce Barbecue', 'Bacon fumé (2 tranches)', 'Cheddar fondu (1 tranche)', 'Oignons croustillants', 'Viande grillée à la flamme', 'Viande grillée à la flamme'],
-  'Deux viandes de bœuf grillées à la flamme, une sauce barbecue, du bacon, du cheddar fondu et des oignons croustillants.',
-  113600,
-);
-configureBurger(
-  'CBK',
-  ['Pain aux pépites de bacon', 'Sauce crémeuse à l’oignon', 'Salade', 'Oignons croustillants', 'Bacon fumé (2 tranches)', 'Cheddar fondu (1 tranche)', 'Poulet croustillant'],
-  'Une sauce crémeuse à l’oignon, de la salade, des oignons croustillants, du bacon fumé, du cheddar fondu et un poulet croustillant dans un pain aux pépites de bacon.',
-  113700,
-);
-configureBurger(
-  'Double CBK',
-  ['Pain aux pépites de bacon', 'Sauce crémeuse à l’oignon', 'Salade', 'Oignons croustillants', 'Bacon fumé (2 tranches)', 'Cheddar fondu (1 tranche)', 'Poulet croustillant', 'Cheddar fondu (1 tranche)', 'Poulet croustillant'],
-  'Deux fois plus de poulet croustillant et de cheddar, avec sauce crémeuse à l’oignon, salade, oignons croustillants et bacon fumé.',
-  113800,
-);
-configureBurger(
-  'Smoky Chicken',
-  ['Pain aux graines de sésame', 'Sauce aux herbes goût grillé', 'Poulet croustillant', 'Cheddar fondu (1 tranche)', 'Tranches de tomates fraîches', 'Salade iceberg'],
-  'Une sauce aux herbes goût grillé, du poulet croustillant, du cheddar fondu, des tomates fraîches et de la salade iceberg.',
-  113900,
-);
-configureBurger(
-  'Chicken Louisiane Steakhouse',
-  ['Pain moelleux', 'Sauce épicée façon cajun', 'Oignons croustillants', 'Bacon fumé (2 tranches)', 'Cheddar fondu (1 tranche)', 'Poulet croustillant'],
-  'Une sauce épicée façon cajun, des oignons croustillants, du bacon, du cheddar fondu et un poulet pané croustillant.',
-  114100,
-);
-configureBurger(
-  'Big Fish',
-  ['Pain aux graines de sésame', 'Filet de poisson frit', 'Salade', 'Sauce Big King', 'Cheddar fondu (1 tranche)', 'Tranches de tomates fraîches'],
-  'Un filet de poisson pané croustillant, de la salade, de la sauce BIG KING®, du cheddar fondu et des tomates fraîches.',
-  114200,
-);
-configureBurger(
-  'Veggie Whopper®',
-  ['Pain aux graines de sésame', 'Sauce', 'Salade', 'Tranches de tomates fraîches', "Rondelles d’oignons frais", 'Rondelles de cornichons', 'Haché végétal grillé à la flamme'],
-  'Un haché végétal grillé à la flamme, une sauce onctueuse, des tomates fraîches, de la salade, des cornichons et des oignons.',
-  114300,
-);
-configureBurger(
-  'Veggie Whopper',
-  ['Pain aux graines de sésame', 'Sauce', 'Salade', 'Tranches de tomates fraîches', "Rondelles d’oignons frais", 'Rondelles de cornichons', 'Haché végétal grillé à la flamme'],
-  'Un haché végétal grillé à la flamme, une sauce onctueuse, des tomates fraîches, de la salade, des cornichons et des oignons.',
-  114400,
-);
-configureBurger(
-  'Veggie Steakhouse',
-  ['Pain aux graines de sésame', 'Sauce Barbecue', 'Bacon végétal LA VIE', 'Cheddar fondu (1 tranche)', 'Oignons croustillants', 'Haché végétal grillé à la flamme'],
-  'Des oignons croustillants, une sauce barbecue, du cheddar fondu, du bacon végétal LA VIE™ et un haché végétal grillé à la flamme.',
-  114500,
-);
-configureBurger(
-  'Veggie Chicken Louisiane Steakhouse',
-  ['Pain moelleux', 'Sauce épicée façon cajun', 'Bacon végétal LA VIE', 'Cheddar fondu (1 tranche)', 'Pané végétal croustillant'],
-  'Une sauce épicée façon cajun, du bacon végétal LA VIE™, du cheddar fondu et un pané végétal croustillant.',
-  114600,
-);
-configureBurger(
-  'Master Pairet Poivre',
-  ['Pain brioché moelleux', 'Sauce au poivre', 'Tranches de cheddar fondu', 'Fine galette croustillante de pomme de terre', "Rondelles d’oignons frais", 'Oignons croustillants', 'Viande grillée à la flamme', 'Pain brioché moelleux'],
-  'Une viande de bœuf d’origine France grillée à la flamme, une sauce au poivre, du cheddar fondu, une fine galette croustillante de pomme de terre et des oignons frais et croustillants, dans un pain brioché moelleux.',
-  114700,
-);
-configureBurger(
-  'Cheeseburger',
-  ['Pain aux graines de sésame', 'Ketchup', 'Moutarde', 'Rondelles de cornichons', 'Cheddar fondu (1 tranche)', 'Viande grillée à la flamme'],
-  'Une viande de bœuf grillée à la flamme, une tranche de cheddar fondu, du ketchup, de la moutarde et des cornichons dans un pain aux graines de sésame.',
-  114800,
-);
-configureBurger(
-  'Hamburger',
-  ['Pain aux graines de sésame', 'Ketchup', 'Moutarde', 'Rondelles de cornichons', 'Viande grillée à la flamme'],
-  'Une viande de bœuf grillée à la flamme, du ketchup, de la moutarde et des cornichons dans un pain aux graines de sésame.',
-  114900,
-);
-configureBurger(
-  'Wrap Chicken Louisiane',
-  ['Galette de blé toastée', 'Sauce épicée façon cajun', 'Salade', 'Tranches de tomates fraîches', 'Oignons croustillants', 'Poulet croustillant'],
-  'Un poulet croustillant, une sauce épicée façon cajun, de la salade, des tomates fraîches et des oignons croustillants dans une galette de blé toastée.',
-  115000,
-);
-configureBurger(
-  'Tortilla Cheese & Bacon',
-  ['Galette de blé toastée', 'Poulet croustillant', 'Cheddar fondu (1 tranche)', 'Sauce Barbecue', 'Bacon fumé (2 tranches)', 'Oignons croustillants'],
-  'Un poulet croustillant, du cheddar fondu, de la sauce barbecue, du bacon et des oignons croustillants dans une galette de blé toastée.',
-  115100,
-);
-configureBurger(
-  'Wrap Veggie Chicken Louisiane',
-  ['Galette de blé toastée', 'Sauce épicée façon cajun', 'Salade', 'Tranches de tomates fraîches', 'Oignons croustillants', 'Pané végétal croustillant'],
-  'Un pané végétal croustillant, une sauce épicée façon cajun, de la salade, des tomates fraîches et des oignons croustillants dans une galette de blé toastée.',
-  115200,
-);
-configureBurger(
-  'Tortilla Veggie Cheese & Bacon',
-  ['Galette de blé toastée', 'Pané végétal croustillant', 'Cheddar fondu (1 tranche)', 'Sauce Barbecue', 'Bacon végétal LA VIE', 'Oignons croustillants'],
-  'Un pané végétal croustillant, du cheddar fondu, de la sauce barbecue, du bacon végétal et des oignons croustillants dans une galette de blé toastée.',
-  115300,
-);
-
-const initialCatalog: CatalogProduct[] = burgerKingCatalogTemplate;
+const initialCatalog: CatalogProduct[] = [];
 
 const initialAgentRules: Array<[string, boolean]> = [
   ['Toujours reformuler les choix et suppléments', true],
@@ -1414,7 +778,7 @@ function ProductConfigurator({ product, onClose, onSave }: { product: CatalogPro
   );
 }
 
-function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptions, onClose, onSave, onDelete, isNew, isSaving }: {
+function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptions, onClose, onSave, onDelete, isNew, isSaving, catalogProducts }: {
   draft: ProductDraft;
   setDraft: React.Dispatch<React.SetStateAction<ProductDraft>>;
   categories: MenuCategory[];
@@ -1424,34 +788,158 @@ function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptio
   onDelete?: () => void | Promise<void>;
   isNew: boolean;
   isSaving: boolean;
+  catalogProducts: CatalogProduct[];
 }) {
   const isMenu = draft.productType === 'menu';
+  const [typeMode, setTypeMode] = useState<'simple' | 'menu' | 'fromProduct'>(isMenu ? 'menu' : 'simple');
+  const [baseProductId, setBaseProductId] = useState<number | ''>('');
+  const [newIngredient, setNewIngredient] = useState('');
+  const baseProducts = useMemo(() => catalogProducts.filter(product => product.productType !== 'menu'), [catalogProducts]);
+  const addIngredient = () => {
+    const name = newIngredient.trim();
+    if (!name) return;
+    setDraft(current => ({ ...current, ingredients: [...current.ingredients, { id: Date.now(), name, removable: true, extraAllowed: false, extraPrice: 0 }] }));
+    setNewIngredient('');
+  };
+  const updateIngredient = (id: number, patch: Partial<ProductIngredient>) =>
+    setDraft(current => ({ ...current, ingredients: current.ingredients.map(ingredient => ingredient.id === id ? { ...ingredient, ...patch } : ingredient) }));
+  const removeIngredient = (id: number) =>
+    setDraft(current => ({ ...current, ingredients: current.ingredients.filter(ingredient => ingredient.id !== id) }));
+  const moveIngredient = (id: number, direction: -1 | 1) =>
+    setDraft(current => {
+      const index = current.ingredients.findIndex(ingredient => ingredient.id === id);
+      const targetIndex = index + direction;
+      if (index === -1 || targetIndex < 0 || targetIndex >= current.ingredients.length) return current;
+      const next = [...current.ingredients];
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return { ...current, ingredients: next };
+    });
+  const selectBaseProduct = (productId: number) => {
+    const product = catalogProducts.find(item => item.id === productId);
+    if (!product) return;
+    setBaseProductId(productId);
+    setDraft(current => {
+      const existingGroups = current.optionGroups;
+      const hasBurgerGroup = existingGroups.some(group => !group.sizeScope && /burger|plat/i.test(group.name));
+      const nextGroups = hasBurgerGroup
+        ? existingGroups.map(group => {
+            if (!group.sizeScope && /burger|plat/i.test(group.name) && !group.options.some(option => option.name === product.name)) {
+              return { ...group, options: [...group.options, { id: Date.now(), name: product.name, priceDelta: 0, posCode: '', available: true }] };
+            }
+            return group;
+          })
+        : [
+            { id: Date.now(), name: 'Burger', question: 'Quel burger souhaitez-vous ?', required: true, min: 1, max: 1, options: [{ id: Date.now() + 1, name: product.name, priceDelta: 0, posCode: '', available: true }] },
+            ...existingGroups,
+          ];
+      return {
+        ...current,
+        productType: 'menu',
+        mainProduct: product.name,
+        name: current.name.trim() ? current.name : `Menu ${product.name}`,
+        price: current.price || product.price,
+        imageUrl: current.imageUrl || product.imageUrl || '',
+        emoji: product.emoji || current.emoji,
+        detail: current.detail.trim() ? current.detail : product.detail,
+        ingredients: current.ingredients.length === 0 ? [...product.ingredients] : current.ingredients,
+        optionGroups: nextGroups,
+      };
+    });
+  };
   const sizeGroup = useMemo(() => draft.optionGroups.find(group => /taille/i.test(group.name)), [draft.optionGroups]);
+  const burgerGroup = useMemo(() => draft.optionGroups.find(group => !group.sizeScope && /burger|plat/i.test(group.name)), [draft.optionGroups]);
   const [selectedSize, setSelectedSize] = useState(sizeGroup?.options[0]?.name ?? 'Medium');
+  const [showPreview, setShowPreview] = useState(false);
+  const [previewSelectedSize, setPreviewSelectedSize] = useState<string>(sizeGroup?.options[0]?.name ?? 'Medium');
+  const [previewSelections, setPreviewSelections] = useState<Record<number, number>>({});
+  const [isCreatingSize, setIsCreatingSize] = useState(false);
+  const [newSizeName, setNewSizeName] = useState('');
+  const [newSizePriceDelta, setNewSizePriceDelta] = useState(0);
   const sizes = useMemo(() => sizeGroup?.options ?? [], [sizeGroup]);
+  const activeSizeOption = useMemo(() => sizes.find(s => s.name === selectedSize), [sizes, selectedSize]);
 
   useEffect(() => {
     if (!isMenu || draft.optionGroups.length > 0) return;
     const initialSizes: ProductOption[] = [
       { id: Date.now(), name: 'Medium', priceDelta: 0, posCode: '', available: true },
-      { id: Date.now() + 1, name: 'Large', priceDelta: 2, posCode: '', available: true },
+      { id: Date.now() + 1, name: 'Large', priceDelta: 2.6, posCode: '', available: true },
     ];
-    const makeRules = (): Partial<Record<string, ProductGroupRule>> =>
-      Object.fromEntries(initialSizes.map(size => [size.name, { required: true, min: 1, max: 1 }]));
     setDraft(current => ({
       ...current,
       optionGroups: [
         { id: Date.now() + 2, name: 'Tailles', question: 'Quelle taille de menu souhaitez-vous ?', required: true, min: 1, max: 1, options: initialSizes },
-        { id: Date.now() + 3, name: 'Accompagnements', question: 'Quel accompagnement souhaitez-vous ?', required: true, min: 1, max: 1, rulesBySize: makeRules(), options: [] },
-        { id: Date.now() + 4, name: 'Boissons', question: 'Quelle boisson souhaitez-vous ?', required: true, min: 1, max: 1, rulesBySize: makeRules(), options: [] },
-        { id: Date.now() + 5, name: 'Sauces', question: 'Quelle sauce souhaitez-vous ?', required: false, min: 0, max: 2, rulesBySize: makeRules(), options: [] },
+        { id: Date.now() + 3, name: 'Burger', question: 'Quel burger souhaitez-vous ?', required: true, min: 1, max: 1, options: [] },
+        { id: Date.now() + 4, name: 'Accompagnements', question: 'Quel accompagnement souhaitez-vous ?', required: true, min: 1, max: 1, sizeScope: 'Medium', options: [] },
+        { id: Date.now() + 5, name: 'Boissons', question: 'Quelle boisson souhaitez-vous ?', required: true, min: 1, max: 1, sizeScope: 'Medium', options: [] },
+        { id: Date.now() + 6, name: 'Accompagnements', question: 'Quel accompagnement souhaitez-vous ?', required: true, min: 1, max: 1, sizeScope: 'Large', options: [] },
+        { id: Date.now() + 7, name: 'Boissons', question: 'Quelle boisson souhaitez-vous ?', required: true, min: 1, max: 1, sizeScope: 'Large', options: [] },
       ],
     }));
   }, [draft.optionGroups.length, isMenu, setDraft]);
 
+  // Migration et synchronisation des groupes manquants pour chaque taille existante
+  useEffect(() => {
+    if (!isMenu || !sizeGroup) return;
+    const existingSizes = sizeGroup.options.map(s => s.name);
+    const missingGroups: ProductOptionGroup[] = [];
+    let nextId = Date.now();
+
+    existingSizes.forEach(sizeName => {
+      const hasAccompagnements = draft.optionGroups.some(g => g.sizeScope === sizeName && /accompagnement/i.test(g.name));
+      const hasBoissons = draft.optionGroups.some(g => g.sizeScope === sizeName && /boisson/i.test(g.name));
+
+      if (!hasAccompagnements) {
+        missingGroups.push({
+          id: nextId++,
+          name: 'Accompagnements',
+          question: 'Quel accompagnement souhaitez-vous ?',
+          required: true,
+          min: 1,
+          max: 1,
+          sizeScope: sizeName,
+          options: [],
+        });
+      }
+      if (!hasBoissons) {
+        missingGroups.push({
+          id: nextId++,
+          name: 'Boissons',
+          question: 'Quelle boisson souhaitez-vous ?',
+          required: true,
+          min: 1,
+          max: 1,
+          sizeScope: sizeName,
+          options: [],
+        });
+      }
+    });
+
+    const hasBurger = draft.optionGroups.some(g => !g.sizeScope && /burger|plat/i.test(g.name));
+    if (!hasBurger) {
+      missingGroups.unshift({
+        id: nextId++,
+        name: 'Burger',
+        question: 'Quel burger souhaitez-vous ?',
+        required: true,
+        min: 1,
+        max: 1,
+        options: [],
+      });
+    }
+
+    if (missingGroups.length > 0) {
+      setDraft(current => ({
+        ...current,
+        optionGroups: [...current.optionGroups, ...missingGroups],
+      }));
+    }
+  }, [isMenu, sizeGroup, draft.optionGroups, setDraft]);
+
   useEffect(() => {
     const firstSize = sizeGroup?.options[0]?.name;
-    if (firstSize && !sizes.some(size => size.name === selectedSize)) window.setTimeout(() => setSelectedSize(firstSize), 0);
+    if (firstSize && !sizes.some(size => size.name === selectedSize)) {
+      window.setTimeout(() => setSelectedSize(firstSize), 0);
+    }
   }, [selectedSize, sizeGroup, sizes]);
 
   const updateDraft = (patch: Partial<ProductDraft>) => setDraft(current => ({ ...current, ...patch }));
@@ -1464,95 +952,130 @@ function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptio
         ? { ...group, options: group.options.map(option => option.id === optionId ? { ...option, ...patch } : option) }
         : group),
     }));
-  const ruleFor = (group: ProductOptionGroup, size: string): ProductGroupRule =>
-    group.rulesBySize?.[size] ?? { required: group.required, min: group.min, max: group.max };
-  const updateRule = (groupId: number, size: string, patch: Partial<ProductGroupRule>) =>
-    setDraft(current => ({
-      ...current,
-      optionGroups: current.optionGroups.map(group => {
-        if (group.id !== groupId) return group;
-        const rulesBySize = { ...(group.rulesBySize ?? {}), [size]: { ...ruleFor(group, size), ...patch } };
-        return { ...group, rulesBySize };
-      }),
-    }));
+
   const renameSize = (oldName: string, newName: string) => {
     const trimmed = newName.trim();
     if (!trimmed || oldName === trimmed) return;
     setDraft(current => ({
       ...current,
       optionGroups: current.optionGroups.map(group => {
-        const rulesBySize = Object.fromEntries(
-          Object.entries(group.rulesBySize ?? {}).map(([size, rule]) => [size === oldName ? trimmed : size, rule]),
-        );
-        return {
-          ...group,
-          rulesBySize: Object.keys(rulesBySize).length ? rulesBySize : group.rulesBySize,
-          options: group.options.map(option => ({
-            ...option,
-            availableFor: option.availableFor?.map(size => size === oldName ? trimmed : size),
-          })),
-        };
+        if (/taille/i.test(group.name)) {
+          return {
+            ...group,
+            options: group.options.map(option => option.name === oldName ? { ...option, name: trimmed } : option),
+          };
+        }
+        if (group.sizeScope === oldName) {
+          return { ...group, sizeScope: trimmed };
+        }
+        return group;
       }),
     }));
     if (selectedSize === oldName) setSelectedSize(trimmed);
+    if (previewSelectedSize === oldName) setPreviewSelectedSize(trimmed);
   };
-  const addSize = () => {
-    if (!sizeGroup) return;
-    const nextName = `Taille ${sizeGroup.options.length + 1}`;
-    const id = Date.now();
+
+  const updateSizePriceDelta = (sizeName: string, priceDelta: number) => {
     setDraft(current => ({
       ...current,
-      optionGroups: current.optionGroups.map(group => group.id === sizeGroup.id
-        ? { ...group, options: [...group.options, { id, name: nextName, priceDelta: 0, posCode: '', available: true }] }
-        : {
-          ...group,
-          rulesBySize: isMenu
-            ? { ...(group.rulesBySize ?? {}), [nextName]: { required: group.required, min: group.min, max: group.max } }
-            : group.rulesBySize,
-        }),
+      optionGroups: current.optionGroups.map(group => {
+        if (/taille/i.test(group.name)) {
+          return {
+            ...group,
+            options: group.options.map(option => option.name === sizeName ? { ...option, priceDelta } : option),
+          };
+        }
+        return group;
+      }),
     }));
-    setSelectedSize(nextName);
   };
+
+  const addSize = (sizeName: string, priceDelta: number = 0) => {
+    const trimmed = sizeName.trim();
+    if (!trimmed) return;
+    const id = Date.now();
+    setDraft(current => {
+      const currentSizeGroup = current.optionGroups.find(g => /taille/i.test(g.name));
+      const updatedGroups = currentSizeGroup
+        ? current.optionGroups.map(g => g.id === currentSizeGroup.id
+            ? { ...g, options: [...g.options, { id, name: trimmed, priceDelta, posCode: '', available: true }] }
+            : g)
+        : [
+            ...current.optionGroups,
+            { id: id + 1, name: 'Tailles', question: 'Quelle taille de menu souhaitez-vous ?', required: true, min: 1, max: 1, options: [{ id, name: trimmed, priceDelta, posCode: '', available: true }] },
+          ];
+
+      return {
+        ...current,
+        optionGroups: [
+          ...updatedGroups,
+          { id: id + 2, name: 'Accompagnements', question: 'Quel accompagnement souhaitez-vous ?', required: true, min: 1, max: 1, sizeScope: trimmed, options: [] },
+          { id: id + 3, name: 'Boissons', question: 'Quelle boisson souhaitez-vous ?', required: true, min: 1, max: 1, sizeScope: trimmed, options: [] },
+        ],
+      };
+    });
+    setSelectedSize(trimmed);
+    setPreviewSelectedSize(trimmed);
+    setIsCreatingSize(false);
+    setNewSizeName('');
+    setNewSizePriceDelta(0);
+  };
+
   const removeSize = (sizeName: string) => {
     if (!sizeGroup || sizeGroup.options.length <= 1) return;
     setDraft(current => ({
       ...current,
-      optionGroups: current.optionGroups.map(group => {
-        if (group.id === sizeGroup.id) return { ...group, options: group.options.filter(option => option.name !== sizeName) };
-        const rulesBySize = { ...(group.rulesBySize ?? {}) };
-        delete rulesBySize[sizeName];
-        return {
-          ...group,
-          rulesBySize,
-          options: group.options
-            .map(option => option.availableFor ? { ...option, availableFor: option.availableFor.filter(size => size !== sizeName) } : option)
-            .filter(option => !option.availableFor || option.availableFor.length > 0),
-        };
-      }),
+      optionGroups: current.optionGroups
+        .filter(group => group.sizeScope !== sizeName)
+        .map(group => {
+          if (group.id === sizeGroup.id) {
+            return { ...group, options: group.options.filter(option => option.name !== sizeName) };
+          }
+          return group;
+        }),
     }));
-    if (selectedSize === sizeName) setSelectedSize(sizeGroup.options.find(option => option.name !== sizeName)?.name ?? '');
+    if (selectedSize === sizeName) {
+      const remaining = sizeGroup.options.find(option => option.name !== sizeName)?.name ?? '';
+      setSelectedSize(remaining);
+      setPreviewSelectedSize(remaining);
+    }
   };
-  const addGroup = () => {
+
+  const addGroupForCurrentSize = () => {
     const id = Date.now();
-    const rulesBySize = sizes.length
-      ? Object.fromEntries(sizes.map(size => [size.name, { required: false, min: 0, max: 1 }]))
-      : undefined;
     setDraft(current => ({
       ...current,
-      optionGroups: [...current.optionGroups, { id, name: 'Nouvelle composition', question: 'Quel choix souhaitez-vous ?', required: false, min: 0, max: 1, rulesBySize, options: [] }],
+      optionGroups: [
+        ...current.optionGroups,
+        {
+          id,
+          name: 'Nouveau choix',
+          question: 'Quel choix souhaitez-vous ?',
+          required: false,
+          min: 0,
+          max: 1,
+          sizeScope: selectedSize,
+          options: [],
+        },
+      ],
     }));
   };
+
   const addOption = (group: ProductOptionGroup) => {
     const id = Date.now();
-    const availableFor = sizeGroup && selectedSize ? [selectedSize] : undefined;
     updateGroup(group.id, {
-      options: [...group.options, { id, name: 'Nouvelle option', priceDelta: 0, posCode: '', available: true, availableFor }],
+      options: [...group.options, { id, name: 'Nouvelle option', priceDelta: 0, posCode: '', available: true }],
     });
   };
   const removeOption = (groupId: number, optionId: number) =>
     updateGroup(groupId, { options: draft.optionGroups.find(group => group.id === groupId)?.options.filter(option => option.id !== optionId) ?? [] });
-  const removeGroup = (groupId: number) => setDraft(current => ({ ...current, optionGroups: current.optionGroups.filter(group => group.id !== groupId) }));
-  const changeType = (type: 'simple' | 'menu') => {
+  const changeType = (type: 'simple' | 'menu' | 'fromProduct') => {
+    setTypeMode(type);
+    if (type === 'fromProduct') {
+      updateDraft({ productType: 'menu' });
+      return;
+    }
+    setBaseProductId('');
     updateDraft({ productType: type });
     if (type === 'menu' && !draft.optionGroups.length) {
       setSelectedSize('Medium');
@@ -1561,177 +1084,653 @@ function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptio
   const visibleOptions = (group: ProductOptionGroup) =>
     group.options.filter(option => !sizeGroup || !option.availableFor || option.availableFor.includes(selectedSize));
 
-  return (
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-[#07130d]/60 p-3 md:p-5" role="dialog" aria-modal="true" aria-label={isMenu ? 'Créer un menu configurable' : 'Créer un produit simple'}>
-      <div className="max-h-[94vh] w-full max-w-5xl overflow-y-auto rounded-[28px] bg-[#f7f8f5] shadow-2xl">
-        <div className="sticky top-0 z-20 flex items-start justify-between border-b border-[#e2e7df] bg-white p-5 md:p-6">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">Catalogue restaurant</p>
-            <h2 className="mt-1 text-2xl font-black">{isNew ? (isMenu ? 'Créer un menu configurable' : 'Créer un produit simple') : `Modifier ${draft.name || 'le produit'}`}</h2>
-            <p className="mt-1 text-xs text-[#7f8981]">Une fiche simple, puis les règles exactes de chaque taille.</p>
+  if (showPreview && isMenu) {
+    const previewSizeOption = sizes.find(s => s.name === previewSelectedSize) ?? sizes[0];
+    const visiblePreviewGroups = draft.optionGroups.filter(g => {
+      if (/taille/i.test(g.name)) return false;
+      if (!g.sizeScope) return true;
+      return g.sizeScope === previewSelectedSize;
+    });
+
+    // Calcul du prix total avec tous les suppléments sélectionnés
+    const previewPrice = useMemo(() => {
+      let total = draft.price + (previewSizeOption?.priceDelta ?? 0);
+      visiblePreviewGroups.forEach(group => {
+        const selectedOptionId = previewSelections[group.id];
+        if (selectedOptionId) {
+          const option = group.options.find(opt => opt.id === selectedOptionId);
+          if (option) {
+            total += option.priceDelta;
+          }
+        } else if (group.required && group.options.length > 0) {
+          // Par défaut, prendre la première option si obligatoire
+          total += group.options[0].priceDelta;
+        }
+      });
+      return total;
+    }, [draft.price, previewSizeOption, previewSelections, visiblePreviewGroups]);
+
+    // Initialiser les sélections par défaut quand la modale s'ouvre
+    useEffect(() => {
+      const defaults: Record<number, number> = {};
+      visiblePreviewGroups.forEach(group => {
+        if (group.required && group.options.length > 0) {
+          defaults[group.id] = group.options[0].id;
+        }
+      });
+      setPreviewSelections(defaults);
+    }, [showPreview, visiblePreviewGroups]);
+
+    return (
+      <div className="fixed inset-0 z-[60] grid place-items-center bg-[#07130d]/60 p-3 md:p-5" role="dialog" aria-modal="true" aria-label="Prévisualisation client">
+        <div className="max-h-[94vh] w-full max-w-4xl overflow-y-auto rounded-[28px] bg-white shadow-2xl">
+          <div className="sticky top-0 z-20 flex items-center justify-between border-b border-[#e2e7df] bg-white px-6 py-4">
+            <div className="flex items-center gap-3">
+              <span className="rounded-lg bg-[#0b1f14] px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-[#ffcf45]">CATALOGUE</span>
+              <span className="text-[10px] font-black text-[#7f8981]">· Aperçu client en direct</span>
+            </div>
+            <button onClick={() => setShowPreview(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button>
           </div>
-          <button onClick={onClose} className="grid h-10 w-10 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button>
+          <div className="p-5 md:p-6">
+            <div className="grid gap-6 md:grid-cols-[1fr_1.3fr]">
+              <div className="grid place-items-center rounded-3xl bg-[#f4f6f2] p-8">
+                {draft.imageUrl ? (
+                  <img src={draft.imageUrl} alt={draft.name} className="max-h-80 w-full object-contain" />
+                ) : (
+                  <span className="text-8xl">{draft.emoji}</span>
+                )}
+              </div>
+              <div>
+                <h2 className="text-2xl font-black">{draft.name}</h2>
+                <p className="mt-2 text-sm leading-relaxed text-[#657168]">{draft.detail}</p>
+                <div className="mt-4 flex items-baseline gap-2">
+                  <p className="text-3xl font-black text-[#0b1f14]">{money.format(previewPrice)}</p>
+                  {previewSizeOption && previewSizeOption.priceDelta > 0 && (
+                    <span className="text-xs font-bold text-[#7f8981]">
+                      (dont +{money.format(previewSizeOption.priceDelta)} taille {previewSizeOption.name})
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-6 space-y-6">
+                  {/* Étape 1 : Choix de la taille */}
+                  {sizes.length > 0 && (
+                    <section className="rounded-2xl border border-[#e7ebe5] bg-[#fafbf8] p-4">
+                      <div className="flex items-center gap-2">
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#ffcf45] text-[9px] font-black text-[#3e2d00]">1</span>
+                        <h3 className="font-black text-sm">Choisissez votre taille</h3>
+                        <span className="rounded-full bg-[#fff0ec] px-2 py-0.5 text-[8px] font-black text-[#d6503d]">Obligatoire</span>
+                      </div>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        {sizes.map(size => {
+                          const isChecked = previewSelectedSize === size.name;
+                          return (
+                            <button
+                              key={size.id}
+                              type="button"
+                              onClick={() => setPreviewSelectedSize(size.name)}
+                              className={`flex items-center justify-between rounded-xl border p-3 text-left transition ${
+                                isChecked
+                                  ? 'border-[#ff5a36] bg-[#fff5f2] ring-2 ring-[#ff5a36]/20'
+                                  : 'border-[#dfe4dc] bg-white hover:border-[#ccd3c9]'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <span className={`grid h-4 w-4 place-items-center rounded-full border ${isChecked ? 'border-[#ff5a36] bg-[#ff5a36]' : 'border-[#ccd3c9]'}`}>
+                                  {isChecked && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                                </span>
+                                <span className="font-bold text-xs">{size.name}</span>
+                              </div>
+                              <span className="text-xs font-black text-[#7f8981]">
+                                {size.priceDelta > 0 ? `+${money.format(size.priceDelta)}` : 'Inclus'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
+
+                  {/* Étapes suivantes : Plat, Accompagnements et Boissons de la taille choisie */}
+                  {visiblePreviewGroups.map((group, groupIndex) => (
+                    <section key={group.id} className="rounded-2xl border border-[#e7ebe5] bg-[#fafbf8] p-4">
+                      <div className="flex items-center gap-2">
+                        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[#ffcf45] text-[9px] font-black text-[#3e2d00]">
+                          {groupIndex + 2}
+                        </span>
+                        <h3 className="font-black text-sm">{group.name}</h3>
+                        {group.required && <span className="rounded-full bg-[#fff0ec] px-2 py-0.5 text-[8px] font-black text-[#d6503d]">Obligatoire</span>}
+                      </div>
+                      <p className="mt-1 pl-8 text-[11px] text-[#7f8981]">{group.question}</p>
+                      <div className="mt-3 space-y-2">
+                        {group.options.map((option, optIdx) => {
+                          const isSelected = previewSelections[group.id] === option.id;
+                          return (
+                            <label key={option.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-4 py-2.5 transition ${isSelected ? 'border-[#ff5a36] bg-[#fff5f2]' : 'border-[#e7ebe5] bg-white hover:border-[#ff9e87]'}`}>
+                              <input
+                                type="radio"
+                                name={`preview-group-${group.id}`}
+                                className="h-4 w-4 accent-[#ff5a36]"
+                                checked={isSelected}
+                                onChange={() => setPreviewSelections(prev => ({ ...prev, [group.id]: option.id }))}
+                              />
+                              <span className="min-w-0 flex-1 font-bold text-xs">{option.name}</span>
+                              {option.priceDelta > 0 && (
+                                <span className="text-xs font-black text-[#bd5d3d]">+{money.format(option.priceDelta)}</span>
+                              )}
+                            </label>
+                          );
+                        })}
+                        {group.options.length === 0 && (
+                          <p className="rounded-xl border border-dashed border-[#dfe4dc] py-4 text-center text-xs text-[#8b948c]">
+                            Aucune option configurée pour la taille {previewSelectedSize}.
+                          </p>
+                        )}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPreview(false)}
+                  className="mt-7 w-full rounded-2xl bg-[#0b1f14] px-5 py-4 text-sm font-black text-white hover:bg-[#153423]"
+                >
+                  Ajouter à la commande · {money.format(previewPrice)}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-[#07130d]/60 p-3 md:p-5" role="dialog" aria-modal="true" aria-label={isMenu ? 'Configurer le produit' : 'Configurer le produit'}>
+      <div className="max-h-[94vh] w-full max-w-4xl overflow-y-auto rounded-[28px] bg-white shadow-2xl">
+        <div className="sticky top-0 z-20 flex items-center justify-between border-b border-[#e2e7df] bg-white px-6 py-4">
+          <div className="flex items-center gap-3">
+            <span className="rounded-lg bg-[#0b1f14] px-2.5 py-1 text-[9px] font-black uppercase tracking-widest text-[#ffcf45]">CATALOGUE</span>
+            <span className="text-[10px] font-black text-[#7f8981]">· bk</span>
+          </div>
+          <button onClick={onClose} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button>
         </div>
 
-        <div className="space-y-5 p-5 md:p-6">
-          <section className={`${panelCard} p-5`}>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <button type="button" onClick={() => changeType('simple')} className={`rounded-2xl border p-4 text-left transition ${!isMenu ? 'border-[#ff7658] bg-[#fff3ee] ring-2 ring-[#ff7658]/15' : 'border-[#e2e7df] bg-white'}`}>
-                <span className="text-2xl">🍽️</span>
-                <strong className="mt-2 block text-sm">Produit simple</strong>
-                <span className="mt-1 block text-[10px] text-[#7f8981]">Un produit avec son prix et sa disponibilité.</span>
-              </button>
-              <button type="button" onClick={() => changeType('menu')} className={`rounded-2xl border p-4 text-left transition ${isMenu ? 'border-[#ff7658] bg-[#fff3ee] ring-2 ring-[#ff7658]/15' : 'border-[#e2e7df] bg-white'}`}>
-                <span className="text-2xl">🍔</span>
-                <strong className="mt-2 block text-sm">Menu configurable</strong>
-                <span className="mt-1 block text-[10px] text-[#7f8981]">Tailles, accompagnements, boissons et sauces.</span>
-              </button>
-            </div>
-          </section>
+        <div className="p-6">
+          <h2 className="text-2xl font-black">Configurer le produit</h2>
 
-          <section className={`${panelCard} p-5`}>
-            <div className="grid gap-4 md:grid-cols-[90px_1fr_1fr]">
-              <label className="text-xs font-bold text-[#68736a]">Visuel
-                <input className={`${fieldClass} mt-2 text-center text-2xl`} maxLength={3} value={draft.emoji} onChange={event => updateDraft({ emoji: event.target.value })} />
-              </label>
-              <label className="text-xs font-bold text-[#68736a]">Nom du produit *
-                <input className={`${fieldClass} mt-2`} placeholder={isMenu ? 'Ex. Menu Whopper' : 'Ex. Whopper'} value={draft.name} onChange={event => updateDraft({ name: event.target.value })} />
-              </label>
-              <label className="text-xs font-bold text-[#68736a]">Catégorie *
-                <select className={`${fieldClass} mt-2`} value={draft.category} onChange={event => updateDraft({ category: event.target.value, subcategory: subcategoryTemplates[event.target.value]?.[1] ?? '' })}>
-                  {categories.map(category => <option key={category.id} value={category.name}>{category.name}</option>)}
-                </select>
-              </label>
-            </div>
-            {subcategoryOptions.length > 1 && (
-              <label className="mt-4 block text-xs font-bold text-[#68736a]">Sous-catégorie
-                <select className={`${fieldClass} mt-2`} value={draft.subcategory} onChange={event => updateDraft({ subcategory: event.target.value })}>
-                  {subcategoryOptions.filter(option => option !== 'Tous').map(option => <option key={option}>{option}</option>)}
-                </select>
-              </label>
-            )}
-            {isMenu && (
-              <label className="mt-4 block text-xs font-bold text-[#68736a]">Produit principal *
-                <input className={`${fieldClass} mt-2`} placeholder="Ex. Whopper" value={draft.mainProduct} onChange={event => updateDraft({ mainProduct: event.target.value })} />
-                <span className="mt-1 block text-[10px] font-normal text-[#8b948c]">Ce produit reste le même, les règles ci-dessous changent selon la taille.</span>
-              </label>
-            )}
-            <label className="mt-4 block text-xs font-bold text-[#68736a]">Description client
-              <textarea className="mt-2 min-h-20 w-full rounded-xl border border-[#dfe4dc] p-3 text-sm font-semibold outline-none focus:border-[#ff6a45]" placeholder="Décrivez brièvement le produit…" value={draft.detail} onChange={event => updateDraft({ detail: event.target.value })} />
+          <div className="mt-6 grid gap-4 md:grid-cols-[1fr_200px]">
+            <label className="text-xs font-bold text-[#68736a]">Nom du produit *
+              <input className={`${fieldClass} mt-2`} placeholder={isMenu ? 'Ex. Menu Whopper' : 'Ex. Whopper'} value={draft.name} onChange={event => updateDraft({ name: event.target.value })} />
             </label>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="text-xs font-bold text-[#68736a]">Prix TTC *
-                <div className="relative mt-2"><input className={`${fieldClass} pr-10`} type="number" min="0" step="0.01" value={draft.price} onChange={event => updateDraft({ price: Number(event.target.value) })} /><span className="absolute right-4 top-3 text-sm font-black">€</span></div>
+            <label className="text-xs font-bold text-[#68736a]">Type
+              <select className={`${fieldClass} mt-2`} value={typeMode} onChange={event => changeType(event.target.value as 'simple' | 'menu' | 'fromProduct')}>
+                <option value="simple">Produit simple</option>
+                <option value="menu">Menu configurable (manuel)</option>
+                <option value="fromProduct">Créer un menu à partir d'un produit simple</option>
+              </select>
+            </label>
+          </div>
+          {typeMode === 'fromProduct' && (
+            <div className="mt-4 rounded-xl border border-[#ff5a36] bg-[#fff5f2] p-4">
+              <label className="text-xs font-bold text-[#68736a]">Produit de base *
+                <select
+                  className={`${fieldClass} mt-2`}
+                  value={baseProductId}
+                  onChange={event => selectBaseProduct(Number(event.target.value))}
+                >
+                  <option value="" disabled>Choisissez un produit simple existant…</option>
+                  {baseProducts.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}
+                </select>
               </label>
-              <label className="text-xs font-bold text-[#68736a]">Image URL <span className="font-normal text-[#929a93]">(optionnel)</span>
-                <input className={`${fieldClass} mt-2`} placeholder="https://…" value={draft.imageUrl} onChange={event => updateDraft({ imageUrl: event.target.value })} />
-              </label>
+              {baseProducts.length === 0 && <p className="mt-2 text-[10px] font-bold text-[#b3573f]">Créez d'abord un produit simple (ex. Big King) pour pouvoir générer un menu à partir de lui.</p>}
+              {baseProductId !== '' && <p className="mt-2 text-[10px] font-bold text-[#2e7d32]">✓ Le plat "{catalogProducts.find(p => p.id === baseProductId)?.name}" a été ajouté au groupe Plat / Burger ci-dessous. Vous pouvez en ajouter d'autres.</p>}
             </div>
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="text-xs font-bold text-[#68736a]">Code POS <span className="font-normal text-[#929a93]">(optionnel)</span>
-                <input className={`${fieldClass} mt-2 font-mono`} placeholder="Ex. MENU-WHP-M" value={draft.posCode} onChange={event => updateDraft({ posCode: event.target.value })} />
-              </label>
-              <label className="text-xs font-bold text-[#68736a]">Slug URL <span className="font-normal text-[#929a93]">(optionnel)</span>
-                <input className={`${fieldClass} mt-2`} placeholder="menu-whopper" value={draft.slug} onChange={event => updateDraft({ slug: event.target.value })} />
-              </label>
+          )}
+          <label className="mt-4 block text-xs font-bold text-[#68736a]">Description
+            <textarea className="mt-2 min-h-20 w-full rounded-xl border border-[#dfe4dc] p-3 text-sm font-semibold outline-none focus:border-[#ff6a45]" placeholder="Décrivez brièvement le produit…" value={draft.detail} onChange={event => updateDraft({ detail: event.target.value })} />
+          </label>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <label className="text-xs font-bold text-[#68736a]">Catégorie *
+              <select className={`${fieldClass} mt-2`} value={draft.category} onChange={event => updateDraft({ category: event.target.value, subcategory: subcategoryTemplates[event.target.value]?.[1] ?? '' })}>
+                {categories.map(category => <option key={category.id} value={category.name}>{category.name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-bold text-[#68736a]">Prix TTC *
+              <div className="relative mt-2"><input className={`${fieldClass} pr-10`} type="number" min="0" step="0.01" value={draft.price} onChange={event => updateDraft({ price: Number(event.target.value) })} /><span className="absolute right-4 top-3 text-sm font-black">€</span></div>
+            </label>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-[80px_1fr_1fr]">
+            <label className="text-xs font-bold text-[#68736a]">Icône
+              <input className={`${fieldClass} mt-2 text-center text-2xl`} maxLength={3} value={draft.emoji} onChange={event => updateDraft({ emoji: event.target.value })} />
+            </label>
+            <label className="text-xs font-bold text-[#68736a]">Visuel (image)
+              <div className="mt-2 space-y-2">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={event => {
+                    const file = event.target.files?.[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = () => updateDraft({ imageUrl: reader.result as string });
+                    reader.readAsDataURL(file);
+                  }}
+                  className="w-full rounded-xl border border-[#dfe4dc] bg-white p-2 text-[10px] font-semibold"
+                />
+                <input className={fieldClass} placeholder="ou collez une URL https://…" value={draft.imageUrl} onChange={event => updateDraft({ imageUrl: event.target.value })} />
+              </div>
+            </label>
+            <label className="text-xs font-bold text-[#68736a]">Slug URL
+              <input className={`${fieldClass} mt-2`} placeholder="ex. big-king" value={draft.slug} onChange={event => updateDraft({ slug: event.target.value })} />
+            </label>
+          </div>
+
+          <section className="mt-6 rounded-2xl border border-[#dfe4dc] bg-[#fafbf8] p-4">
+            <h3 className="text-sm font-black">Composition et ingrédients</h3>
+            <p className="mt-1 text-[10px] text-[#7f8981]">Décrivez les ingrédients du produit pour que l'agent IA connaisse sa composition et puisse gérer les retraits / suppléments demandés par les clients.</p>
+            <div className="mt-3 overflow-hidden rounded-xl border border-[#e2e7df] bg-white">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-[#f0f3ee] text-[10px] font-black uppercase tracking-wider text-[#7f8981]">
+                  <tr>
+                    <th className="px-4 py-2">Ingrédient</th>
+                    <th className="px-3 py-2 text-center">Retrait possible</th>
+                    <th className="px-3 py-2 text-center">Supplément possible</th>
+                    <th className="px-3 py-2">Prix supplément</th>
+                    <th className="w-16"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {draft.ingredients.map((ingredient, index) => (
+                    <tr key={ingredient.id} className="border-t border-[#e7ebe5]">
+                      <td className="px-4 py-2">
+                        <input className="w-full bg-transparent text-xs font-black outline-none" placeholder="Ex. Sauce King, Salade, Pain…" value={ingredient.name} onChange={event => updateIngredient(ingredient.id, { name: event.target.value })} />
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <input type="checkbox" className="h-4 w-4" checked={ingredient.removable} onChange={event => updateIngredient(ingredient.id, { removable: event.target.checked })} />
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <input type="checkbox" className="h-4 w-4" checked={ingredient.extraAllowed} onChange={event => updateIngredient(ingredient.id, { extraAllowed: event.target.checked })} />
+                      </td>
+                      <td className="px-3 py-2">
+                        {ingredient.extraAllowed && (
+                          <div className="flex items-center gap-1">
+                            <input className="w-16 rounded-lg border border-[#dfe4dc] px-2 py-1 text-right text-xs font-black outline-none" type="number" min="0" step="0.1" value={ingredient.extraPrice} onChange={event => updateIngredient(ingredient.id, { extraPrice: Number(event.target.value) })} />
+                            <span className="text-xs font-black">€</span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-center whitespace-nowrap">
+                        <button type="button" onClick={() => moveIngredient(ingredient.id, -1)} disabled={index === 0} className="px-1 text-xs font-black text-[#475249] disabled:opacity-30" aria-label="Monter">↑</button>
+                        <button type="button" onClick={() => moveIngredient(ingredient.id, 1)} disabled={index === draft.ingredients.length - 1} className="px-1 text-xs font-black text-[#475249] disabled:opacity-30" aria-label="Descendre">↓</button>
+                        <button type="button" onClick={() => removeIngredient(ingredient.id)} className="px-1 text-sm font-black text-[#d6503d]" aria-label="Supprimer">×</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {draft.ingredients.length === 0 && (
+                    <tr><td colSpan={5} className="px-4 py-3 text-center text-xs text-[#8a938b]">Aucun ingrédient renseigné pour le moment.</td></tr>
+                  )}
+                </tbody>
+              </table>
             </div>
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                className="flex-1 rounded-xl border border-[#dfe4dc] px-3 py-2 text-xs font-bold outline-none focus:border-[#ff5a36]"
+                placeholder="Ajouter un ingrédient (ex. Sauce King)"
+                value={newIngredient}
+                onChange={event => setNewIngredient(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addIngredient(); } }}
+              />
+              <button type="button" onClick={addIngredient} className="rounded-xl bg-[#0b1f14] px-4 py-2 text-xs font-black text-white">＋ Ajouter</button>
+            </div>
+            <div className="mt-3 rounded-xl bg-[#edf5ef] p-3 text-[10px] leading-relaxed text-[#52705b]"><strong>Compréhension IA :</strong> ces réglages génèrent automatiquement les retraits et suppléments utilisables pendant la commande.</div>
           </section>
 
           {isMenu && (
-            <section className={`${panelCard} p-5`}>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <section className="mt-8">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e2e7df] pb-4">
                 <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">1 · Tailles du menu</p>
-                  <h3 className="mt-1 text-lg font-black">Chaque taille possède sa propre composition</h3>
-                  <p className="mt-1 text-[10px] text-[#7f8981]">Cliquez sur Medium ou Large pour configurer ses accompagnements, boissons et sauces.</p>
+                  <h3 className="text-lg font-black">Tailles du menu</h3>
+                  <p className="mt-1 text-[10px] text-[#7f8981]">
+                    Chaque taille possède ses propres accompagnements et boissons. Les burgers sont communs à toutes les tailles.
+                  </p>
                 </div>
-                <button type="button" onClick={addSize} className="rounded-xl bg-[#0b1f14] px-4 py-2.5 text-[10px] font-black text-white">＋ Ajouter une taille</button>
               </div>
-              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {sizes.map((size, index) => (
-                  <div key={size.id} className={`relative rounded-2xl border p-4 transition ${selectedSize === size.name ? 'border-[#35a85a] bg-[#eef9f1] ring-2 ring-[#35a85a]/10' : 'border-[#dfe5dc] bg-[#fafbf8]'}`}>
-                    <button type="button" onClick={() => setSelectedSize(size.name)} className="absolute inset-0 z-0" aria-label={`Configurer la taille ${size.name}`} />
-                    <div className="relative z-10 flex items-start gap-2">
-                      <span className="rounded-full bg-[#ffcf45] px-2 py-1 text-[9px] font-black text-[#3e2d00]">TAILLE {index + 1}</span>
-                      <button type="button" onClick={() => removeSize(size.name)} disabled={sizes.length <= 1} className="ml-auto text-xs font-black text-[#d6503d] disabled:opacity-25" aria-label={`Supprimer ${size.name}`}>×</button>
-                    </div>
-                    <input className="relative z-10 mt-3 w-full bg-transparent text-sm font-black outline-none" value={size.name} onChange={event => renameSize(size.name, event.target.value)} onClick={event => event.stopPropagation()} />
-                    <label className="relative z-10 mt-3 flex items-center gap-2 text-[9px] font-bold text-[#7b847d]">Supplément
-                      <input className="h-8 w-20 rounded-lg border border-[#dfe4dc] bg-white px-2 text-right text-[10px] font-black" type="number" min="0" step="0.1" value={size.priceDelta} onChange={event => updateOption(sizeGroup?.id ?? 0, size.id, { priceDelta: Number(event.target.value) })} onClick={event => event.stopPropagation()} /> €
-                    </label>
-                    <p className="relative z-10 mt-3 text-[9px] font-black text-[#35a85a]">{selectedSize === size.name ? '✓ Taille sélectionnée' : 'Cliquer pour configurer'}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
 
-          {isMenu && (
-            <section className={`${panelCard} p-5`}>
-              <div className="flex flex-col gap-3 border-b border-[#e7ebe5] pb-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">2 · Composition par taille</p>
-                  <h3 className="mt-1 text-lg font-black">Règles de {selectedSize || 'la taille sélectionnée'}</h3>
-                </div>
-                <div className="flex gap-2 overflow-x-auto">
-                  {sizes.map(size => <button type="button" key={size.id} onClick={() => setSelectedSize(size.name)} className={`shrink-0 rounded-full px-3 py-2 text-[10px] font-black ${selectedSize === size.name ? 'bg-[#0b1f14] text-white' : 'bg-[#eef1ed] text-[#687169]'}`}>{size.name}</button>)}
-                </div>
-              </div>
-              <div className="mt-5 space-y-4">
-                {draft.optionGroups.filter(group => group.id !== sizeGroup?.id).map((group, index) => {
-                  const rule = ruleFor(group, selectedSize);
-                  const options = visibleOptions(group);
+              {/* Barre des onglets de tailles + bouton Créer une taille */}
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                {sizes.map(size => {
+                  const isSelected = selectedSize === size.name;
                   return (
-                    <article key={group.id} className="rounded-2xl border border-[#dfe5dc] bg-[#fafbf8] p-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-start">
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ffcf45] text-[10px] font-black text-[#3e2d00]">{index + 2}</span>
-                        <div className="min-w-0 flex-1">
-                          <input aria-label="Nom du groupe de choix" className="w-full bg-transparent text-base font-black outline-none" value={group.name} onChange={event => updateGroup(group.id, { name: event.target.value })} />
-                          <input aria-label="Question du groupe de choix" className="mt-1 w-full bg-transparent text-[10px] font-semibold text-[#7f8981] outline-none" value={group.question} onChange={event => updateGroup(group.id, { question: event.target.value })} />
-                        </div>
-                        <button type="button" onClick={() => removeGroup(group.id)} className="text-xs font-black text-[#d6503d]">Supprimer</button>
-                      </div>
-                      <div className="mt-3 flex flex-wrap items-center gap-2 border-y border-[#e7ebe5] py-3">
-                        <button type="button" onClick={() => updateRule(group.id, selectedSize, { required: !rule.required, min: rule.required ? 0 : 1 })} className={`rounded-full px-3 py-1.5 text-[9px] font-black ${rule.required ? 'bg-[#e8f7ec] text-[#27894a]' : 'bg-[#eef1ed] text-[#7d867e]'}`}>{rule.required ? '✓ Choix obligatoire' : 'Choix facultatif'}</button>
-                        <label className="flex items-center gap-2 text-[9px] font-bold text-[#7b847d]">Minimum <input className="h-8 w-16 rounded-lg border border-[#dfe4dc] bg-white px-2 text-right text-[10px] font-black" type="number" min="0" max={rule.max} value={rule.min} onChange={event => updateRule(group.id, selectedSize, { min: Number(event.target.value) })} /></label>
-                        <label className="flex items-center gap-2 text-[9px] font-bold text-[#7b847d]">Maximum <input className="h-8 w-16 rounded-lg border border-[#dfe4dc] bg-white px-2 text-right text-[10px] font-black" type="number" min={Math.max(1, rule.min)} value={rule.max} onChange={event => updateRule(group.id, selectedSize, { max: Number(event.target.value) })} /></label>
-                        <span className="ml-auto text-[9px] font-black text-[#8b948c]">{options.length} choix pour {selectedSize}</span>
-                      </div>
-                      <div className="mt-3 space-y-2">
-                        {options.map(option => (
-                          <div key={option.id} className="grid gap-2 rounded-xl border border-[#e4e8e1] bg-white p-3 sm:grid-cols-[1fr_120px_34px]">
-                            <input aria-label={`Nom de l'option ${option.name}`} className={fieldClass} value={option.name} onChange={event => updateOption(group.id, option.id, { name: event.target.value })} />
-                            <label className="relative"><span className="absolute left-3 top-3 text-[9px] font-bold text-[#8b948c]">+ €</span><input aria-label={`Supplément ${option.name}`} className={`${fieldClass} pl-9`} type="number" min="0" step="0.1" value={option.priceDeltaBySize?.[selectedSize] ?? option.priceDelta} onChange={event => updateOption(group.id, option.id, { priceDeltaBySize: { ...(option.priceDeltaBySize ?? {}), [selectedSize]: Number(event.target.value) }, priceDelta: Number(event.target.value) })} /></label>
-                            <button type="button" onClick={() => removeOption(group.id, option.id)} aria-label={`Supprimer ${option.name}`} className="text-lg font-black text-[#d6503d]">×</button>
-                          </div>
-                        ))}
-                        <button type="button" onClick={() => addOption(group)} className="text-[10px] font-black text-[#ff5a36]">＋ Ajouter une option pour {selectedSize}</button>
-                      </div>
-                    </article>
+                    <button
+                      key={size.id}
+                      type="button"
+                      onClick={() => setSelectedSize(size.name)}
+                      className={`flex items-center gap-2 rounded-xl px-4 py-2.5 text-xs font-black transition ${
+                        isSelected
+                          ? 'bg-[#0b1f14] text-white shadow-md ring-2 ring-[#0b1f14]/20'
+                          : 'bg-[#f0f3ee] text-[#475249] hover:bg-[#e4e8e1]'
+                      }`}
+                    >
+                      <span>{size.name}</span>
+                      <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-white/20 text-[#ffcf45]' : 'bg-[#dfe4dc] text-[#636e65]'}`}>
+                        {size.priceDelta > 0 ? `+${size.priceDelta} €` : '0 €'}
+                      </span>
+                    </button>
                   );
                 })}
+
+                {!isCreatingSize ? (
+                  <button
+                    type="button"
+                    onClick={() => { setIsCreatingSize(true); setNewSizeName(''); setNewSizePriceDelta(0); }}
+                    className="flex items-center gap-1.5 rounded-xl border border-dashed border-[#ff5a36] bg-[#fff5f2] px-4 py-2.5 text-xs font-black text-[#ff5a36] transition hover:bg-[#ffece6]"
+                  >
+                    <span>＋</span>
+                    <span>Créer une taille</span>
+                  </button>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[#ff5a36] bg-[#fff8f6] p-2 shadow-sm">
+                    <input
+                      type="text"
+                      placeholder="Nom (ex. XXL, Maxi…)"
+                      value={newSizeName}
+                      onChange={e => setNewSizeName(e.target.value)}
+                      className="w-36 rounded-xl border border-[#dfe4dc] bg-white px-3 py-1.5 text-xs font-bold outline-none focus:border-[#ff5a36]"
+                      autoFocus
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addSize(newSizeName, newSizePriceDelta);
+                        } else if (e.key === 'Escape') {
+                          setIsCreatingSize(false);
+                        }
+                      }}
+                    />
+                    <div className="relative flex items-center">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        placeholder="Supplément"
+                        value={newSizePriceDelta}
+                        onChange={e => setNewSizePriceDelta(Number(e.target.value))}
+                        className="w-20 rounded-xl border border-[#dfe4dc] bg-white px-2 py-1.5 pr-6 text-right text-xs font-black outline-none focus:border-[#ff5a36]"
+                      />
+                      <span className="absolute right-2 text-[10px] font-bold text-[#7f8981]">€</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => addSize(newSizeName, newSizePriceDelta)}
+                      disabled={!newSizeName.trim()}
+                      className="rounded-xl bg-[#0b1f14] px-3.5 py-1.5 text-xs font-black text-white disabled:opacity-40"
+                    >
+                      Valider
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsCreatingSize(false)}
+                      className="rounded-xl border border-[#dfe4dc] bg-white px-2.5 py-1.5 text-xs font-bold text-[#7f8981]"
+                    >
+                      Annuler
+                    </button>
+                  </div>
+                )}
               </div>
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-                <button type="button" onClick={addGroup} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-2.5 text-[10px] font-black">＋ Ajouter un groupe</button>
-                <p className="text-[10px] font-semibold text-[#52705b]">Les options ajoutées ici sont liées uniquement à {selectedSize}.</p>
+
+              {/* Bandeau de contrôle de la taille active */}
+              {activeSizeOption && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#e2e7df] bg-[#fafbf8] p-3.5">
+                  <div className="flex items-center gap-2.5">
+                    <span className="grid h-6 w-6 place-items-center rounded-lg bg-[#ffcf45] text-[11px] font-black text-[#3e2d00]">✓</span>
+                    <p className="text-xs font-black text-[#1c241e]">
+                      Configuration active : <span className="rounded-lg bg-white px-2 py-0.5 text-[#ff5a36] shadow-sm border border-[#e2e7df]">{selectedSize}</span>
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2 text-xs font-bold text-[#68736a]">
+                      <span>Supplément pour cette taille :</span>
+                      <div className="relative flex items-center">
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          className="w-20 rounded-lg border border-[#dfe4dc] bg-white px-2 py-1 pr-6 text-right text-xs font-black"
+                          value={activeSizeOption.priceDelta}
+                          onChange={e => updateSizePriceDelta(selectedSize, Number(e.target.value))}
+                        />
+                        <span className="absolute right-2 text-xs font-black">€</span>
+                      </div>
+                    </label>
+                    {sizes.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeSize(selectedSize)}
+                        className="text-xs font-bold text-[#d6503d] hover:underline"
+                      >
+                        Supprimer cette taille
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Groupes de configuration : Plat (partagé) + Accompagnements & Boissons de la taille active */}
+              <div className="mt-6 space-y-4">
+                {draft.optionGroups
+                  .filter(group => {
+                    // NE JAMAIS afficher le groupe Tailles ici
+                    if (/taille/i.test(group.name)) return false;
+                    // Afficher les groupes sans sizeScope (partagés comme Burger/Plat)
+                    if (!group.sizeScope) return true;
+                    // Afficher uniquement les groupes de la taille sélectionnée
+                    return group.sizeScope === selectedSize;
+                  })
+                  .map((group, groupIndex) => {
+                    const isBurgerGroup = !group.sizeScope && /burger|plat/i.test(group.name);
+                    return (
+                      <div key={group.id} className="rounded-2xl border border-[#e2e7df] bg-[#fafbf8]">
+                        <div className="flex flex-wrap items-center gap-3 border-b border-[#e7ebe5] p-4">
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#ffcf45] text-[11px] font-black text-[#3e2d00]">
+                            {groupIndex + 1}
+                          </span>
+                          <input
+                            aria-label="Nom du groupe"
+                            className="min-w-0 flex-1 bg-transparent text-base font-black outline-none"
+                            value={group.name}
+                            onChange={event => updateGroup(group.id, { name: event.target.value })}
+                          />
+                          {isBurgerGroup && (
+                            <span className="rounded-md bg-[#eaf4ed] px-2 py-0.5 text-[10px] font-black text-[#2e7d32]">
+                              Commun à toutes les tailles
+                            </span>
+                          )}
+                          <label className="flex items-center gap-2 text-[10px] font-bold text-[#68736a]">
+                            <input
+                              type="checkbox"
+                              checked={group.required}
+                              onChange={event => updateGroup(group.id, { required: event.target.checked, min: event.target.checked ? 1 : 0 })}
+                              className="h-4 w-4 rounded border-[#dfe4dc]"
+                            />
+                            Choix obligatoire
+                          </label>
+                          {!isBurgerGroup && (
+                            <label className="flex items-center gap-2 text-[10px] font-bold text-[#68736a]">
+                              <input
+                                type="checkbox"
+                                checked={group.max > 1}
+                                onChange={event => updateGroup(group.id, { max: event.target.checked ? 10 : 1 })}
+                                className="h-4 w-4 rounded border-[#dfe4dc]"
+                              />
+                              Plusieurs choix possibles
+                            </label>
+                          )}
+                          {!isBurgerGroup && (
+                            <button
+                              type="button"
+                              onClick={() => updateDraft({ optionGroups: draft.optionGroups.filter(item => item.id !== group.id) })}
+                              className="ml-auto text-xs font-black text-[#d6503d]"
+                            >
+                              Supprimer
+                            </button>
+                          )}
+                        </div>
+                        <div className="p-4">
+                          {isBurgerGroup ? (
+                            <div>
+                              <div className="overflow-hidden rounded-xl border border-[#e2e7df] bg-white">
+                                <table className="w-full text-left text-sm">
+                                  <thead className="bg-[#f0f3ee] text-[10px] font-black uppercase tracking-wider text-[#7f8981]">
+                                    <tr>
+                                      <th className="px-4 py-2">Nom du plat / burger</th>
+                                      <th className="w-10"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {group.options.map(option => (
+                                      <tr key={option.id} className="border-t border-[#e7ebe5]">
+                                        <td className="px-4 py-2">
+                                          <input
+                                            className="w-full bg-transparent text-xs font-black outline-none"
+                                            placeholder="Ex. Whopper, Steakhouse, Kid Fish…"
+                                            value={option.name}
+                                            onChange={event => updateOption(group.id, option.id, { name: event.target.value })}
+                                          />
+                                        </td>
+                                        <td className="px-2 py-2 text-center">
+                                          <button
+                                            type="button"
+                                            onClick={() => removeOption(group.id, option.id)}
+                                            className="text-sm font-black text-[#d6503d]"
+                                            aria-label="Supprimer ce plat"
+                                          >
+                                            ×
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    {group.options.length === 0 && (
+                                      <tr>
+                                        <td colSpan={2} className="px-4 py-3 text-center text-xs text-[#8a938b]">
+                                          Aucun plat dans ce menu. Cliquez sur "＋ Ajouter un plat" ci-dessous.
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => updateGroup(group.id, { options: [...group.options, { id: Date.now(), name: 'Nouveau plat', priceDelta: 0, posCode: '', available: true }] })}
+                                className="mt-3 text-[10px] font-black text-[#ff5a36]"
+                              >
+                                ＋ Ajouter un plat / burger
+                              </button>
+                            </div>
+                          ) : (
+                            <div>
+                              <div className="overflow-hidden rounded-xl border border-[#e2e7df] bg-white">
+                                <table className="w-full text-left text-sm">
+                                  <thead className="bg-[#f0f3ee] text-[10px] font-black uppercase tracking-wider text-[#7f8981]">
+                                    <tr>
+                                      <th className="px-4 py-2">Nom de l'option</th>
+                                      <th className="px-4 py-2">Supplément (€)</th>
+                                      <th className="w-10"></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {group.options.map(option => (
+                                      <tr key={option.id} className="border-t border-[#e7ebe5]">
+                                        <td className="px-4 py-2">
+                                          <input
+                                            className="w-full bg-transparent text-xs font-black outline-none"
+                                            placeholder="Ex. Frites, Onion Rings, Coca-Cola…"
+                                            value={option.name}
+                                            onChange={event => updateOption(group.id, option.id, { name: event.target.value })}
+                                          />
+                                        </td>
+                                        <td className="px-4 py-2">
+                                          <div className="flex items-center gap-1">
+                                            <input
+                                              className="w-20 rounded-lg border border-[#dfe4dc] px-2 py-1 text-right text-xs font-black outline-none focus:border-[#ff5a36]"
+                                              type="number"
+                                              min="0"
+                                              step="0.1"
+                                              value={option.priceDelta}
+                                              onChange={event => updateOption(group.id, option.id, { priceDelta: Number(event.target.value) })}
+                                            />
+                                            <span className="text-xs font-black">€</span>
+                                          </div>
+                                        </td>
+                                        <td className="px-2 py-2 text-center">
+                                          <button
+                                            type="button"
+                                            onClick={() => removeOption(group.id, option.id)}
+                                            className="text-sm font-black text-[#d6503d]"
+                                            aria-label="Supprimer cette option"
+                                          >
+                                            ×
+                                          </button>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    {group.options.length === 0 && (
+                                      <tr>
+                                        <td colSpan={3} className="px-4 py-3 text-center text-xs text-[#8a938b]">
+                                          Aucune option pour {group.name.toLowerCase()} en taille {selectedSize}.
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => updateGroup(group.id, { options: [...group.options, { id: Date.now(), name: 'Nouvelle option', priceDelta: 0, posCode: '', available: true }] })}
+                                className="mt-3 text-[10px] font-black text-[#ff5a36]"
+                              >
+                                ＋ Ajouter une option pour {selectedSize}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* Bouton d'ajout d'un groupe supplémentaire pour cette taille */}
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={addGroupForCurrentSize}
+                  className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-2 text-xs font-black text-[#0b1f14] hover:bg-[#f0f3ee]"
+                >
+                  ＋ Ajouter un autre groupe pour la taille {selectedSize}
+                </button>
               </div>
             </section>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#e4e8e1] bg-white p-4">
+          <div className="mt-8 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#e4e8e1] bg-white p-4">
             <div>
               <p className="text-sm font-black">Produit disponible</p>
-              <p className="mt-1 text-[10px] text-[#8a938b]">Le produit peut être proposé par l’agent IA.</p>
+              <p className="mt-1 text-[10px] text-[#8a938b]">Le produit peut être proposé par l'agent IA.</p>
             </div>
             <button type="button" onClick={() => updateDraft({ available: !draft.available })} className={`relative h-7 w-12 rounded-full ${draft.available ? 'bg-[#35a85a]' : 'bg-[#d9ded8]'}`} aria-label={draft.available ? 'Masquer le produit' : 'Rendre le produit disponible'}>
               <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow ${draft.available ? 'left-6' : 'left-1'}`} />
             </button>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
             {onDelete && <button type="button" onClick={() => void onDelete()} className="text-xs font-black text-[#d6503d]">Supprimer le produit</button>}
             <div className="ml-auto flex gap-2">
               <button type="button" onClick={onClose} className="rounded-xl border border-[#dfe4dc] bg-white px-4 py-3 text-xs font-black">Annuler</button>
-              <button type="button" onClick={() => void onSave()} disabled={isSaving || !draft.name.trim() || (isMenu && !draft.mainProduct.trim()) || !draft.category || (isMenu && !sizes.length)} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:opacity-40">{isSaving ? 'Enregistrement…' : 'Enregistrer le produit'}</button>
+              {isMenu && (
+                <button type="button" onClick={() => setShowPreview(true)} disabled={!draft.name.trim() || !draft.category || !sizes.length} className="rounded-xl border border-[#dfe4dc] bg-white px-5 py-3 text-xs font-black disabled:opacity-40">Prévisualiser</button>
+              )}
+              <button type="button" onClick={() => void onSave()} disabled={isSaving || !draft.name.trim() || !draft.category || (isMenu && !sizes.length)} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:opacity-40">{isSaving ? 'Enregistrement…' : 'Enregistrer le produit'}</button>
             </div>
           </div>
         </div>
@@ -1739,6 +1738,7 @@ function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptio
     </div>
   );
 }
+
 
 function IngredientProductEditor({ draft, setDraft, categories, catalogProducts, subcategoryOptions, newIngredient, setNewIngredient, addIngredient, updateIngredient, moveIngredient, onClose, onSave, onDelete, isNew }: {
   draft: ProductDraft;
@@ -1758,7 +1758,6 @@ function IngredientProductEditor({ draft, setDraft, categories, catalogProducts,
 }) {
   const ingredientRows = draft.ingredients as ProductIngredient[];
   const isMenu = draft.productType === 'menu' || draft.category === 'Menus' || draft.category === 'Menus enfants';
-  const isCompositionCategory = isMenu || draft.category === 'Burgers' || /tortilla|wrap/i.test(draft.category);
   const menuSteps = draft.optionGroups;
   const sizeStep = menuSteps.find(step => /taille/i.test(step.name));
   const [selectedMenuSize, setSelectedMenuSize] = useState(sizeStep?.options[0]?.name ?? 'Medium');
@@ -1788,23 +1787,30 @@ function IngredientProductEditor({ draft, setDraft, categories, catalogProducts,
       <div className="sticky top-0 z-10 flex items-start justify-between border-b border-[#e7eae5] bg-white p-6"><div><p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">Fiche produit</p><h2 className="mt-1 text-2xl font-black">{isNew ? 'Créer un produit' : 'Modifier le produit'}</h2></div><button onClick={onClose} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] font-black">×</button></div>
       <div className="p-6">
         <div className="grid gap-4 md:grid-cols-[90px_1fr_1fr]"><label className="text-xs font-bold text-[#68736a]">Visuel<input className={`${fieldClass} mt-2 text-center text-2xl`} maxLength={3} value={draft.emoji} onChange={event=>setDraft(current=>({...current,emoji:event.target.value}))} /></label><label className="text-xs font-bold text-[#68736a]">Nom du produit *<input className={`${fieldClass} mt-2`} placeholder="Ex. Big King" value={draft.name} onChange={event=>setDraft(current=>({...current,name:event.target.value}))} /></label><label className="text-xs font-bold text-[#68736a]">Catégorie *<select className={`${fieldClass} mt-2`} value={draft.category} onChange={event=>{const category=event.target.value;setDraft(current=>({...current,category,subcategory:subcategoryTemplates[category]?.[1]??'',productType:category==='Menus'||category==='Menus enfants'?'menu':current.productType==='menu'?'simple':current.productType}));}}>{categories.map(category=><option key={category.id}>{category.name}</option>)}</select></label></div>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <label className="text-xs font-bold text-[#68736a]">Image du produit
+            <div className="mt-2 space-y-2">
+              <input type="file" accept="image/*" onChange={event=>{const file=event.target.files?.[0];if(file){const reader=new FileReader();reader.onload=()=>setDraft(current=>({...current,imageUrl:reader.result as string}));reader.readAsDataURL(file);}}} className="w-full rounded-xl border border-[#dfe4dc] bg-white p-2 text-xs" />
+              <input className={fieldClass} placeholder="https://..." value={draft.imageUrl} onChange={event=>setDraft(current=>({...current,imageUrl:event.target.value}))} />
+            </div>
+          </label>
+          <label className="text-xs font-bold text-[#68736a]">Slug URL<input className={`${fieldClass} mt-2`} placeholder="master-sarran-poulet-mozza" value={draft.slug} onChange={event=>setDraft(current=>({...current,slug:event.target.value}))} /></label>
+        </div>
         {subcategoryOptions.length>1&&<label className="mt-4 block text-xs font-bold text-[#68736a]">Sous-catégorie<select className={`${fieldClass} mt-2`} value={draft.subcategory} onChange={event=>setDraft(current=>({...current,subcategory:event.target.value}))}>{subcategoryOptions.filter(option=>option!=='Tous').map(option=><option key={option}>{option}</option>)}</select></label>}
         <label className="mt-4 block text-xs font-bold text-[#68736a]">Description client<textarea className="mt-2 min-h-20 w-full rounded-xl border border-[#dfe4dc] p-3 text-sm font-semibold outline-none focus:border-[#ff6a45]" placeholder="Décrivez brièvement le produit…" value={draft.detail} onChange={event=>setDraft(current=>({...current,detail:event.target.value}))} /></label>
         <div className="mt-4 grid gap-4 md:grid-cols-2"><label className="text-xs font-bold text-[#68736a]">Prix TTC de cet établissement *<div className="relative mt-2"><input className={`${fieldClass} pr-10`} type="number" min="0" step="0.01" value={draft.price} onChange={event=>setDraft(current=>({...current,price:Number(event.target.value)}))} /><span className="absolute right-4 top-3 text-sm font-black">€</span></div><p className="mt-1 text-[10px] font-normal text-[#919991]">Ce prix local est indépendant du catalogue maître.</p></label><label className="text-xs font-bold text-[#68736a]">Code POS<input className={`${fieldClass} mt-2 font-mono`} placeholder="Ex. BRG-BGK-01" value={draft.posCode} onChange={event=>setDraft(current=>({...current,posCode:event.target.value}))} /></label></div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <label className="text-xs font-bold text-[#68736a]">Slug URL<input className={`${fieldClass} mt-2`} placeholder="master-sarran-poulet-mozza" value={draft.slug} onChange={event=>setDraft(current=>({...current,slug:event.target.value}))} /></label>
-          <label className="text-xs font-bold text-[#68736a]">Image URL<input className={`${fieldClass} mt-2`} placeholder="https://..." value={draft.imageUrl} onChange={event=>setDraft(current=>({...current,imageUrl:event.target.value}))} /></label>
           <label className="text-xs font-bold text-[#68736a]">Filtre viande<select className={`${fieldClass} mt-2`} value={draft.meatFilter} onChange={event=>setDraft(current=>({...current,meatFilter:event.target.value}))}><option value="">Non renseigné</option><option>Poulet</option><option>Bœuf</option><option>Poisson</option><option>Veggie</option></select></label>
-          <label className="text-xs font-bold text-[#68736a]">Ordre d’affichage<input className={`${fieldClass} mt-2`} type="number" min="0" value={draft.displayOrder} onChange={event=>setDraft(current=>({...current,displayOrder:Number(event.target.value)}))} /></label>
+          <label className="text-xs font-bold text-[#68736a]">Ordre d'affichage<input className={`${fieldClass} mt-2`} type="number" min="0" value={draft.displayOrder} onChange={event=>setDraft(current=>({...current,displayOrder:Number(event.target.value)}))} /></label>
         </div>
         <label className="mt-4 block text-xs font-bold text-[#68736a]">Badges <span className="font-normal text-[#919991]">(séparés par des virgules)</span><input className={`${fieldClass} mt-2`} placeholder="100% filet, Nouveau" value={draft.badges} onChange={event=>setDraft(current=>({...current,badges:event.target.value}))} /></label>
         <label className="mt-4 block text-xs font-bold text-[#68736a]">Type de produit<select className={`${fieldClass} mt-2`} value={draft.productType} onChange={event=>setDraft(current=>({...current,productType:event.target.value as ProductDraft['productType']}))}><option value="simple">Produit simple</option><option value="configurable">Produit configurable</option><option value="menu">Menu</option><option value="bundle">Pack / à partager</option></select></label>
-        {isCompositionCategory&&<section className="mt-5 rounded-2xl border border-[#dfe4dc] bg-[#fafbf8] p-4">
+        <section className="mt-5 rounded-2xl border border-[#dfe4dc] bg-[#fafbf8] p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-black text-[#536057]">Composition et ingrédients</p><p className="mt-1 text-[10px] text-[#8b948c]">Ajoutez les couches dans l’ordre réel du produit, du haut vers le bas. Les répétitions sont autorisées.</p></div><span className="w-fit rounded-full bg-[#eef2ed] px-3 py-1.5 text-[9px] font-black text-[#667168]">{ingredientRows.length} couche{ingredientRows.length!==1?'s':''}</span></div>
           <div className="mt-4 flex gap-2"><input aria-label="Nouvel ingrédient" className={fieldClass} placeholder="Ex. Cheddar fondu (1 tranche)" value={newIngredient} onChange={event=>setNewIngredient(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();addIngredient();}}} /><button type="button" onClick={addIngredient} disabled={!newIngredient.trim()} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 text-xs font-black text-white disabled:opacity-35">＋ Ajouter</button></div>
           <div className="mt-4 space-y-2">{ingredientRows.map((ingredient,index)=><div key={ingredient.id} className="rounded-xl border border-[#e2e7df] bg-white p-3"><div className="flex items-center gap-2"><span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-[#f2f4ef] text-[10px] font-black text-[#7c857d]">{index+1}</span><input aria-label={`Ingrédient ${index+1}`} className="min-w-0 flex-1 bg-transparent text-xs font-black outline-none focus:text-[#ff5a36]" value={ingredient.name} onChange={event=>updateIngredient(ingredient.id,{name:event.target.value})} /><button type="button" onClick={()=>moveIngredient(index,-1)} disabled={index===0} aria-label="Monter" className="grid h-7 w-7 place-items-center rounded-lg bg-[#f2f4ef] text-[11px] font-black disabled:opacity-25">↑</button><button type="button" onClick={()=>moveIngredient(index,1)} disabled={index===ingredientRows.length-1} aria-label="Descendre" className="grid h-7 w-7 place-items-center rounded-lg bg-[#f2f4ef] text-[11px] font-black disabled:opacity-25">↓</button><button type="button" onClick={()=>setDraft(current=>({...current,ingredients:(current.ingredients as ProductIngredient[]).filter(item=>item.id!==ingredient.id)}))} aria-label="Supprimer" className="grid h-7 w-7 place-items-center rounded-lg bg-[#fff0ec] text-xs font-black text-[#d6503d]">×</button></div><div className="mt-3 flex flex-wrap items-center gap-2 pl-9"><button type="button" onClick={()=>updateIngredient(ingredient.id,{removable:!ingredient.removable})} className={`rounded-full px-3 py-1.5 text-[9px] font-black ${ingredient.removable?'bg-[#fff0ec] text-[#c34c36]':'bg-[#eef1ed] text-[#7d867e]'}`}>{ingredient.removable?'✓ Retrait autorisé':'Retrait interdit'}</button><button type="button" onClick={()=>updateIngredient(ingredient.id,{extraAllowed:!ingredient.extraAllowed})} className={`rounded-full px-3 py-1.5 text-[9px] font-black ${ingredient.extraAllowed?'bg-[#e8f7ec] text-[#27894a]':'bg-[#eef1ed] text-[#7d867e]'}`}>{ingredient.extraAllowed?'✓ Supplément autorisé':'Supplément interdit'}</button>{ingredient.extraAllowed&&<label className="flex items-center gap-2 text-[9px] font-black text-[#707a72]">Prix supplément<input className="h-8 w-20 rounded-lg border border-[#dfe4dc] px-2 text-right text-[10px] font-black outline-none" type="number" min="0" step="0.1" value={ingredient.extraPrice} onChange={event=>updateIngredient(ingredient.id,{extraPrice:Number(event.target.value)})} /> €</label>}</div></div>)}{!ingredientRows.length&&<div className="rounded-xl border border-dashed border-[#ccd4ca] py-7 text-center"><p className="text-xs font-black text-[#778179]">Aucun ingrédient ajouté</p><p className="mt-1 text-[10px] text-[#99a099]">Commencez par le pain supérieur, puis descendez couche par couche.</p></div>}</div>
           <div className="mt-4 rounded-xl bg-[#edf5ef] p-3 text-[10px] leading-relaxed text-[#52705b]"><strong>Compréhension IA :</strong> ces réglages génèrent automatiquement les retraits et suppléments utilisables pendant la commande.</div>
-        </section>}
+        </section>
         {isMenu&&<section className="mt-5 rounded-2xl border border-[#dfe4dc] bg-[#fafbf8] p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-black text-[#536057]">Structure du menu</p><p className="mt-1 text-[10px] text-[#8b948c]">Construisez le parcours présenté au client, dans l’ordre exact de la commande.</p></div><button type="button" onClick={addStep} className="rounded-xl bg-[#0b1f14] px-4 py-2.5 text-[10px] font-black text-white">＋ Ajouter une composition</button></div>
           <div className="mt-5 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">{menuSteps.map((step,index)=><button type="button" key={step.id} onClick={()=>document.getElementById(`menu-step-${step.id}`)?.scrollIntoView({behavior:'smooth',block:'center'})} className="rounded-2xl border border-[#e1e6df] bg-white p-3 text-left shadow-sm transition hover:border-[#ff8d72]"><span className="grid h-7 w-7 place-items-center rounded-full bg-[#ffcf45] text-[10px] font-black text-[#3e2d00]">{index+1}</span><p className="mt-2 text-xs font-black">{step.name}</p><p className="mt-1 text-[9px] text-[#8a938b]">{step.options.length} choix configuré{step.options.length!==1?'s':''}</p></button>)}</div>
@@ -1825,9 +1831,7 @@ function RestaurantMenuBuilderPanel({ products, setProducts, restaurantId, onPer
   onPersistProduct?: (product: CatalogProduct) => Promise<{ ok: boolean; error?: string }>;
   onDeleteProduct?: (productId: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
-  const defaultCategoryTemplate = restaurantId === burgerKingDemoRestaurantId
-    ? burgerKingCategoryTemplate
-    : [['Menus', '▤'], ['Produits', '🍽️'], ['Boissons', '🥤'], ['Accompagnements', '🍟'], ['Sauces', '🥫']] as const;
+  const defaultCategoryTemplate = [['Menus', '▤'], ['Produits', '🍽️'], ['Boissons', '🥤'], ['Accompagnements', '🍟'], ['Sauces', '🥫']] as const;
   const [categories, setCategories] = useState<MenuCategory[]>(defaultCategoryTemplate.map(([name, icon], index) => ({ id: index + 1, name, icon, enabled: true })));
   const categoriesHydrated = useRef(false);
   const [activeCategory, setActiveCategory] = useState('Toutes');
@@ -1973,35 +1977,15 @@ function RestaurantMenuBuilderPanel({ products, setProducts, restaurantId, onPer
   };
   const publishCatalog = () => {
     setPublished(true);
-    setNotice('✓ La nouvelle version de la carte est disponible pour l’agent IA.');
+    setNotice('✓ La nouvelle version de la carte est disponible pour l\'agent IA.');
     window.setTimeout(() => setNotice(''), 2600);
-  };
-  const importBurgerKingTemplate = async () => {
-    const templateProducts = burgerKingCatalogTemplate.map(product => ({ ...product, ingredients: product.ingredients ? [...product.ingredients] : undefined, ingredientSettings: product.ingredientSettings ? product.ingredientSettings.map(ingredient=>({...ingredient})) : undefined, variants: product.variants ? product.variants.map(variant => ({ ...variant })) : undefined, optionGroups: product.optionGroups ? product.optionGroups.map(group => ({ ...group, options: group.options.map(option => ({ ...option })) })) : undefined, modifiers: product.modifiers ? product.modifiers.map(modifier => ({ ...modifier })) : undefined }));
-    setCategories(burgerKingCategoryTemplate.map(([name, icon], index) => ({ id: index + 1, name, icon, enabled: true })));
-    setProducts(templateProducts);
-    if (onPersistProduct) {
-      setIsSaving(true);
-      await Promise.all(templateProducts.map(product => onPersistProduct(product)));
-      setIsSaving(false);
-    }
-    setActiveCategory('Toutes');
-    setPublished(false);
-    setNotice('✓ Modèle Burger King France chargé. Complétez les prix et codes POS du restaurant avant publication.');
-    window.setTimeout(() => setNotice(''), 4200);
   };
 
   return (
     <div>
-      {productEditor!==null&&<RestaurantProductEditor draft={productDraft} setDraft={setProductDraft} categories={categories} subcategoryOptions={subcategoryTemplates[productDraft.category]??[]} onClose={()=>setProductEditor(null)} onSave={saveProduct} isSaving={isSaving} isNew={productEditor==='new'} onDelete={typeof productEditor==='number'?async()=>{if(!window.confirm('Supprimer définitivement ce produit ?'))return;const product=products.find(item=>item.id===productEditor);if(onDeleteProduct&&product){const result=await onDeleteProduct(product.productId);if(!result.ok){setNotice(`⚠️ ${result.error??'Suppression impossible.'}`);return;}}setProducts(current=>current.filter(item=>item.id!==productEditor));setProductEditor(null);setPublished(false);}:undefined} />}
-      <SectionHeading eyebrow="Configuration restaurant" title="Carte du restaurant" description="Créez librement les catégories et produits de votre enseigne. Cette carte validée devient l’unique source utilisée par l’agent IA pour les produits, prix et compositions." action={<div className="flex flex-wrap gap-2"><button onClick={()=>setPreviewOpen(true)} className="rounded-xl border border-[#dce2da] bg-white px-4 py-3 text-xs font-black">Prévisualiser la carte</button><button onClick={publishCatalog} disabled={published} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:bg-[#dce1db] disabled:text-[#7c857e]">{published ? '✓ Carte publiée' : 'Publier la carte'}</button></div>} />
+      {productEditor!==null&&<RestaurantProductEditor draft={productDraft} setDraft={setProductDraft} categories={categories} subcategoryOptions={subcategoryTemplates[productDraft.category]??[]} catalogProducts={products} onClose={()=>setProductEditor(null)} onSave={saveProduct} isSaving={isSaving} isNew={productEditor==='new'} onDelete={typeof productEditor==='number'?async()=>{if(!window.confirm('Supprimer définitivement ce produit ?'))return;const product=products.find(item=>item.id===productEditor);if(onDeleteProduct&&product){const result=await onDeleteProduct(product.productId);if(!result.ok){setNotice(`⚠️ ${result.error??'Suppression impossible.'}`);return;}}setProducts(current=>current.filter(item=>item.id!==productEditor));setProductEditor(null);setPublished(false);}:undefined} />}
+      <SectionHeading eyebrow="Configuration restaurant" title="Carte du restaurant" description="Créez librement les catégories et produits de votre enseigne. Cette carte validée devient l'unique source utilisée par l'agent IA pour les produits, prix et compositions." action={<div className="flex flex-wrap gap-2"><button onClick={publishCatalog} disabled={published} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:bg-[#dce1db] disabled:text-[#7c857e]">{published ? '✓ Carte publiée' : 'Publier la carte'}</button></div>} />
       {notice&&<div className="mb-4 rounded-2xl border border-[#bee4c9] bg-[#e8f8ed] px-5 py-4 text-xs font-black text-[#257c43]">{notice}</div>}
-      <section className={`${panelCard} mb-5 overflow-hidden`}>
-        <div className="grid gap-5 p-5 md:grid-cols-[1fr_auto] md:items-center">
-          <div className="flex items-start gap-4"><span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-[#f5e6d0] text-sm font-black text-[#8b2a16]">BK</span><div><div className="flex flex-wrap items-center gap-2"><h2 className="text-lg font-black">Carte Burger King France</h2><span className="rounded-full bg-[#e7f6eb] px-2.5 py-1 text-[9px] font-black text-[#27894a]">SOURCE PUBLIQUE VÉRIFIÉE</span></div><p className="mt-1 max-w-3xl text-xs leading-relaxed text-[#788179]">Structure, ordre, produits et prix relevés sur la carte publique Burger King France du restaurant K0030. Les codes POS et disponibilités restent personnalisables par restaurant.</p><div className="mt-3 flex flex-wrap gap-2 text-[9px] font-black text-[#747d75]"><span className="rounded-full bg-[#f1f3ef] px-3 py-1.5">{categories.length} catégories</span><span className="rounded-full bg-[#f1f3ef] px-3 py-1.5">{products.length} fiches produits</span><span className="rounded-full bg-[#f1f3ef] px-3 py-1.5">Menus configurables</span><span className="rounded-full bg-[#f1f3ef] px-3 py-1.5">Composition Whopper®</span></div></div></div>
-          <button onClick={importBurgerKingTemplate} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">↻ Recharger le modèle</button>
-        </div>
-      </section>
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[['Version active','v1.4','Publiée aujourd’hui'],['Catégories',String(categories.length),'Structure personnalisée'],['Produits',String(products.length),`${activeCount} disponibles`],['État',published?'À jour':'Brouillon',published?'Agent synchronisé':'Modifications à publier']].map(([label,value,detail])=><div key={label} className={`${panelCard} p-4`}><p className="text-[10px] font-black uppercase tracking-wider text-[#929a93]">{label}</p><p className="mt-2 text-xl font-black">{value}</p><p className={`mt-1 text-[10px] font-bold ${label==='État'&&!published?'text-[#d17a17]':'text-[#778178]'}`}>{detail}</p></div>)}</div>
       {visibleSubcategories.length>0&&<div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-[#e2e6df] bg-white p-3"><span className="mr-1 text-[9px] font-black uppercase tracking-wider text-[#919991]">Sous-catégories</span>{visibleSubcategories.map(subcategory=><button key={subcategory} onClick={()=>setActiveSubcategory(subcategory)} className={`rounded-full border px-4 py-2 text-[10px] font-black transition ${activeSubcategory===subcategory?'border-[#ff5a36] bg-[#ff5a36] text-white':'border-[#dce2da] bg-white text-[#657068] hover:border-[#ff9e87]'}`}>{subcategory} <span className="ml-1 opacity-60">{subcategory==='Tous'?products.filter(product=>product.category===activeCategory).length:products.filter(product=>product.category===activeCategory&&product.subcategory===subcategory).length}</span></button>)}</div>}
       <section className={`${panelCard} grid min-h-[650px] overflow-hidden xl:grid-cols-[250px_1fr]`}>
@@ -2010,7 +1994,7 @@ function RestaurantMenuBuilderPanel({ products, setProducts, restaurantId, onPer
           {filteredProducts.length ? activeSubcategory==='Tous'&&visibleSubcategories.length>1 ? <div className="mt-6 space-y-9">{visibleSubcategories.slice(1).map(subcategory=>{const sectionProducts=filteredProducts.filter(product=>product.subcategory===subcategory);if(!sectionProducts.length)return null;return <section key={subcategory} aria-labelledby={`subcategory-${subcategory}`}><div className="mb-4 flex items-center gap-3"><button onClick={()=>setActiveSubcategory(subcategory)} className="group/title flex items-center gap-2 text-left"><h3 id={`subcategory-${subcategory}`} className="text-xl font-black tracking-[-.02em]">{subcategory}</h3><span className="rounded-full bg-[#eef2ed] px-2.5 py-1 text-[9px] font-black text-[#6f7971]">{sectionProducts.length}</span><span className="text-[10px] font-black text-[#ff5a36] opacity-0 transition group-hover/title:opacity-100">Voir seulement →</span></button><div className="h-px flex-1 bg-[#e3e7e1]" /></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">{sectionProducts.map(renderProductCard)}</div></section>;})}</div> : <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">{filteredProducts.map(renderProductCard)}</div> : <div className="mt-8 rounded-3xl border border-dashed border-[#cfd6cd] py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#f0f3ee] text-2xl">🍽️</div><h3 className="mt-4 text-lg font-black">Aucun produit dans cette sous-catégorie</h3><p className="mt-1 text-xs text-[#858e86]">Ajoutez un produit ou choisissez une autre sous-catégorie.</p><button onClick={()=>openProductEditor()} className="mt-5 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">＋ Ajouter un produit</button></div>}
         </main>
       </section>
-      {previewOpen&&<div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-3 md:p-7" role="dialog" aria-modal="true" aria-label="Prévisualisation de la carte"><div className="mx-auto min-h-[88vh] max-w-7xl overflow-hidden rounded-[28px] bg-[#f6ead8] shadow-2xl"><header className="sticky top-0 z-20 border-b border-[#dfcdb7] bg-[#fff8ed]/95 backdrop-blur"><div className="flex items-center justify-between px-5 py-4 md:px-8"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-full bg-[#c83a20] text-xs font-black text-white">BK</span><div><p className="text-[9px] font-black uppercase tracking-[.18em] text-[#9d6c52]">Prévisualisation DriveVoice</p><h2 className="text-lg font-black text-[#3c160d]">Carte Burger King France</h2></div></div><button onClick={()=>setPreviewOpen(false)} className="grid h-10 w-10 place-items-center rounded-full bg-white text-lg font-black text-[#3c160d] shadow-sm" aria-label="Fermer la prévisualisation">×</button></div><nav className="flex gap-1 overflow-x-auto px-4 pb-3 md:px-7" aria-label="Catégories de la carte"><button onClick={()=>setActiveCategory('Toutes')} className={`shrink-0 rounded-full px-4 py-2 text-[11px] font-black ${activeCategory==='Toutes'?'bg-[#c83a20] text-white':'bg-white text-[#6c3b2b]'}`}>Accueil</button>{categories.map(category=><button key={category.id} onClick={()=>setActiveCategory(category.name)} className={`shrink-0 rounded-full px-4 py-2 text-[11px] font-black ${activeCategory===category.name?'bg-[#c83a20] text-white':'bg-white text-[#6c3b2b]'}`}>{category.icon} {category.name}</button>)}</nav></header><main className="p-5 md:p-8"><div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#c83a20]">{activeCategory==='Toutes'?'Notre carte':activeCategory}</p><h3 className="mt-1 text-3xl font-black tracking-[-.04em] text-[#3c160d]">{activeCategory==='Toutes'?'Choisissez une catégorie':activeCategory}</h3></div><p className="text-[10px] font-bold text-[#8c6d5d]">Aperçu client · prix à confirmer par le restaurant</p></div>{activeCategory==='Toutes'?<div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">{categories.map(category=><button key={category.id} onClick={()=>setActiveCategory(category.name)} className="group overflow-hidden rounded-2xl bg-white text-left shadow-[0_5px_0_#e5d5c2] transition hover:-translate-y-1"><div className="grid h-36 place-items-center bg-gradient-to-br from-white to-[#f8ead6] text-6xl">{category.icon}</div><p className="border-t border-[#f0e3d3] p-4 text-center text-sm font-black text-[#3c160d]">{category.name}</p></button>)}</div>:<div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{products.filter(product=>product.category===activeCategory).map(product=><button key={product.id} onClick={()=>{setPreviewOpen(false);openProductEditor(product);}} className="group overflow-hidden rounded-2xl bg-white text-left shadow-[0_5px_0_#e5d5c2] transition hover:-translate-y-1"><div className="relative grid h-40 place-items-center bg-gradient-to-br from-white to-[#f8ead6] text-7xl">{product.emoji}<span className="absolute right-3 top-3 rounded-full bg-[#fff3df] px-2 py-1 text-[8px] font-black text-[#8c5f42]">BROUILLON</span></div><div className="border-t border-[#f0e3d3] p-4"><h4 className="text-sm font-black text-[#3c160d]">{product.name}</h4><p className="mt-1 line-clamp-2 min-h-8 text-[10px] leading-relaxed text-[#846959]">{product.detail}</p><p className="mt-3 text-xs font-black text-[#c83a20]">{product.price>0?money.format(product.price):'Prix à définir'} <span className="float-right">Configurer →</span></p></div></button>)}</div>}</main></div></div>}
+      {previewOpen&&<div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-3 md:p-7" role="dialog" aria-modal="true" aria-label="Prévisualisation de la carte"><div className="mx-auto min-h-[88vh] max-w-7xl overflow-hidden rounded-[28px] bg-[#f6ead8] shadow-2xl"><header className="sticky top-0 z-20 border-b border-[#dfcdb7] bg-[#fff8ed]/95 backdrop-blur"><div className="flex items-center justify-between px-5 py-4 md:px-8"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-full bg-[#c83a20] text-xs font-black text-white">🍽️</span><div><p className="text-[9px] font-black uppercase tracking-[.18em] text-[#9d6c52]">Prévisualisation DriveVoice</p><h2 className="text-lg font-black text-[#3c160d]">Carte du restaurant</h2></div></div><button onClick={()=>setPreviewOpen(false)} className="grid h-10 w-10 place-items-center rounded-full bg-white text-lg font-black text-[#3c160d] shadow-sm" aria-label="Fermer la prévisualisation">×</button></div><nav className="flex gap-1 overflow-x-auto px-4 pb-3 md:px-7" aria-label="Catégories de la carte"><button onClick={()=>setActiveCategory('Toutes')} className={`shrink-0 rounded-full px-4 py-2 text-[11px] font-black ${activeCategory==='Toutes'?'bg-[#c83a20] text-white':'bg-white text-[#6c3b2b]'}`}>Accueil</button>{categories.map(category=><button key={category.id} onClick={()=>setActiveCategory(category.name)} className={`shrink-0 rounded-full px-4 py-2 text-[11px] font-black ${activeCategory===category.name?'bg-[#c83a20] text-white':'bg-white text-[#6c3b2b]'}`}>{category.icon} {category.name}</button>)}</nav></header><main className="p-5 md:p-8"><div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#c83a20]">{activeCategory==='Toutes'?'Notre carte':activeCategory}</p><h3 className="mt-1 text-3xl font-black tracking-[-.04em] text-[#3c160d]">{activeCategory==='Toutes'?'Choisissez une catégorie':activeCategory}</h3></div><p className="text-[10px] font-bold text-[#8c6d5d]">Aperçu client · prix à confirmer par le restaurant</p></div>{activeCategory==='Toutes'?<div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">{categories.map(category=><button key={category.id} onClick={()=>setActiveCategory(category.name)} className="group overflow-hidden rounded-2xl bg-white text-left shadow-[0_5px_0_#e5d5c2] transition hover:-translate-y-1"><div className="grid h-36 place-items-center bg-gradient-to-br from-white to-[#f8ead6] text-6xl">{category.icon}</div><p className="border-t border-[#f0e3d3] p-4 text-center text-sm font-black text-[#3c160d]">{category.name}</p></button>)}</div>:<div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{products.filter(product=>product.category===activeCategory).map(product=><button key={product.id} onClick={()=>{setPreviewOpen(false);openProductEditor(product);}} className="group overflow-hidden rounded-2xl bg-white text-left shadow-[0_5px_0_#e5d5c2] transition hover:-translate-y-1"><div className="relative grid h-40 place-items-center bg-gradient-to-br from-white to-[#f8ead6] text-7xl">{product.emoji}<span className="absolute right-3 top-3 rounded-full bg-[#fff3df] px-2 py-1 text-[8px] font-black text-[#8c5f42]">BROUILLON</span></div><div className="border-t border-[#f0e3d3] p-4"><h4 className="text-sm font-black text-[#3c160d]">{product.name}</h4><p className="mt-1 line-clamp-2 min-h-8 text-[10px] leading-relaxed text-[#846959]">{product.detail}</p><p className="mt-3 text-xs font-black text-[#c83a20]">{product.price>0?money.format(product.price):'Prix à définir'} <span className="float-right">Configurer →</span></p></div></button>)}</div>}</main></div></div>}
       {categoryEditor!==null&&<div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/55 p-4" role="dialog" aria-modal="true" aria-label="Éditeur de catégorie"><div className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">Structure de la carte</p><h2 className="mt-1 text-2xl font-black">{categoryEditor==='new'?'Nouvelle catégorie':'Modifier la catégorie'}</h2></div><button onClick={()=>setCategoryEditor(null)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] font-black">×</button></div><div className="mt-6 grid grid-cols-[72px_1fr] gap-3"><label className="text-xs font-bold text-[#68736a]">Icône<input className={`${fieldClass} mt-2 text-center text-xl`} maxLength={3} value={categoryDraft.icon} onChange={event=>setCategoryDraft(current=>({...current,icon:event.target.value}))} /></label><label className="text-xs font-bold text-[#68736a]">Nom de la catégorie<input className={`${fieldClass} mt-2`} placeholder="Ex. Boissons froides" value={categoryDraft.name} onChange={event=>setCategoryDraft(current=>({...current,name:event.target.value}))} /></label></div><div className="mt-6 flex items-center justify-between">{typeof categoryEditor==='number'&&<button onClick={()=>{const category=categories.find(item=>item.id===categoryEditor);if(category){removeCategory(category);setCategoryEditor(null);}}} disabled={products.some(product=>product.category===categories.find(item=>item.id===categoryEditor)?.name)} className="text-xs font-black text-[#d6503d] disabled:cursor-not-allowed disabled:text-[#b6bcb7]">Supprimer</button>}<div className="ml-auto flex gap-2"><button onClick={()=>setCategoryEditor(null)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Annuler</button><button onClick={saveCategory} disabled={!categoryDraft.name.trim()} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:opacity-40">Enregistrer</button></div></div>{typeof categoryEditor==='number'&&products.some(product=>product.category===categories.find(item=>item.id===categoryEditor)?.name)&&<p className="mt-3 text-[10px] text-[#9a765f]">Déplacez d’abord les produits de cette catégorie avant de la supprimer.</p>}</div></div>}
     </div>
   );
@@ -2048,9 +2032,8 @@ const quickMasterProducts: CatalogProduct[] = [
 const kfcMasterProducts = createMasterProducts('kfc',[
   ['Menu Colonel Original','Menus','Burger, accompagnement, boisson et sauce','🍔'],['Menu Tower','Menus','Tower en formule complète','🍔'],['Menu Tenders','Menus','Tenders, accompagnement et boisson','🍗'],['Colonel Original','Burgers','Poulet pané, salade et sauce Colonel','🍔'],['Tower','Burgers','Poulet, galette de pomme de terre et fromage','🍔'],['Boxmaster','Burgers','Wrap généreux au poulet croustillant','🌯'],['Tenders x5','Poulet','Filets de poulet croustillants','🍗'],['Hot Wings x8','Poulet','Ailes de poulet épicées','🍗'],['Frites','Accompagnements','Frites dorées','🍟'],['Cobette','Accompagnements','Épi de maïs','🌽'],['Pepsi','Boissons','Boisson fraîche','🥤'],['Lipton Ice Tea','Boissons','Thé glacé','🥤'],['Sauce Colonel','Sauces','Sauce signature KFC','🥫'],['Sauce barbecue','Sauces','Sauce barbecue','🥫'],['P’tit Bucket','Menus enfants','Menu enfant complet','🎁']],3000);
 const initialMasterBrands:MasterBrand[] = [
-  {id:'bk',name:'Burger King France',short:'BK',color:'#c83a20',soft:'#fff0e8',version:1,status:'Publié',restaurants:184,updated:'Aujourd’hui',products:burgerKingCatalogTemplate.map(product=>({...product,available:true}))},
-  {id:'quick',name:'Quick France',short:'Q',color:'#f4c531',soft:'#fff8d9',version:1,status:'Brouillon',restaurants:52,updated:'Aujourd’hui',products:quickMasterProducts},
-  {id:'kfc',name:'KFC France',short:'KFC',color:'#d71920',soft:'#fff0f0',version:1,status:'Brouillon',restaurants:326,updated:'Aujourd’hui',products:kfcMasterProducts},
+  {id:'quick',name:'Quick France',short:'Q',color:'#f4c531',soft:'#fff8d9',version:1,status:'Brouillon',restaurants:52,updated:'Aujourd\'hui',products:quickMasterProducts},
+  {id:'kfc',name:'KFC France',short:'KFC',color:'#d71920',soft:'#fff0f0',version:1,status:'Brouillon',restaurants:326,updated:'Aujourd\'hui',products:kfcMasterProducts},
 ];
 
 function DbStatusBadge({status}:{status:'off'|'loading'|'memory'|'synced'|'saving'|'error'}){
@@ -2271,9 +2254,8 @@ function MasterMenuDetail({ product, onClose, onEdit }: { product: CatalogProduc
   const sideGroup = groups.find(group => /accompagnement/i.test(group.name));
   const drinkGroup = groups.find(group => /boisson/i.test(group.name));
   const sauceGroup = groups.find(group => /sauce/i.test(group.name));
-  const burger = burgerKingCatalogTemplate.find(item => item.category === 'Burgers' && item.name.replace(/[®™]/g, '') === (product.mainProduct ?? product.name).replace(/[®™]/g, ''));
-  const dishName = product.mainProduct ?? burger?.name ?? product.name;
-  const ingredientRows = burger?.ingredientSettings ?? (burger?.ingredients ?? []).map((name, index) => ({ id: product.id * 100 + index, name, removable: true, extraAllowed: false, extraPrice: 0 }));
+  const dishName = product.mainProduct ?? product.name;
+  const ingredientRows = (product.ingredientSettings ?? []).map((setting, index) => ({ id: product.id * 100 + index, name: setting.name, removable: setting.removable, extraAllowed: setting.extraAllowed, extraPrice: setting.extraPrice }));
   const [selectedSize, setSelectedSize] = useState(sizeGroup?.options[0]?.name ?? 'Medium');
   const [selectedSide, setSelectedSide] = useState('');
   const [selectedDrink, setSelectedDrink] = useState('');
@@ -2304,10 +2286,10 @@ function MasterMenuDetail({ product, onClose, onEdit }: { product: CatalogProduc
   const total = product.price + selectedOptionPrice(sizeGroup, selectedSize) + selectedOptionPrice(sideGroup, selectedSide) + selectedOptionPrice(drinkGroup, selectedDrink) + selectedSauceOptions.reduce((sum, option) => sum + optionPrice(option), 0);
   const toggleSauce = (name: string) => setSelectedSauces(current => current.includes(name) ? current.filter(item => item !== name) : current.length < sauceRule.max ? [...current, name] : current);
   const orderedSizeOptions = [...(sizeGroup?.options ?? [])].sort((first, second) => ({ Extra: 0, XXL: 0, 'King Size': 1, King: 1, Medium: 2, M: 2 }[first.name] ?? 3) - ({ Extra: 0, XXL: 0, 'King Size': 1, King: 1, Medium: 2, M: 2 }[second.name] ?? 3));
-  const dishOption: ProductOption = { id: product.id * 1000, name: dishName, priceDelta: 0, posCode: '', available: true, imageUrl: burger?.imageUrl };
+  const dishOption: ProductOption = { id: product.id * 1000, name: dishName, priceDelta: 0, posCode: '', available: true, imageUrl: product.imageUrl };
   const selectCard = (option: ProductOption, selected: boolean, onSelect: () => void, priceLabel?: string) => (
     <button type="button" onClick={onSelect} className={`group relative overflow-hidden rounded-2xl border bg-white p-3 text-left transition hover:-translate-y-0.5 hover:shadow-lg ${selected ? 'border-[#2e9b50] ring-2 ring-[#2e9b50]/20' : 'border-[#e6dfd2]'}`}>
-      <div className="relative grid h-24 place-items-center overflow-hidden rounded-xl bg-[#f8f1e5]">{option.imageUrl || bkOfficialImages[option.name] ? <img src={option.imageUrl || bkOfficialImages[option.name]} alt={option.name} className="h-full w-full object-contain p-2" /> : <span className="text-5xl">{menuOptionIcon(option.name)}</span>}<span className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border-2 ${selected ? 'border-[#2e9b50] bg-[#2e9b50] text-white' : 'border-[#b9b4ab] bg-white/80 text-transparent'}`}>✓</span></div>
+      <div className="relative grid h-24 place-items-center overflow-hidden rounded-xl bg-[#f8f1e5]">{option.imageUrl ? <img src={option.imageUrl} alt={option.name} className="h-full w-full object-contain p-2" /> : <span className="text-5xl">{menuOptionIcon(option.name)}</span>}<span className={`absolute right-2 top-2 grid h-6 w-6 place-items-center rounded-full border-2 ${selected ? 'border-[#2e9b50] bg-[#2e9b50] text-white' : 'border-[#b9b4ab] bg-white/80 text-transparent'}`}>✓</span></div>
       <p className="mt-2 line-clamp-2 min-h-8 text-[10px] font-black leading-tight text-[#3c160d]">{option.name}</p>
       <p className="mt-1 text-[10px] font-black text-[#c83a20]">{priceLabel ?? (optionPrice(option) ? `+${money.format(optionPrice(option))}` : 'Inclus')}</p>
     </button>
@@ -2452,15 +2434,14 @@ export default function Home() {
   const initialTab = requestedTab === 'technical' ? 'integrations' : workspaceTabs.find(tab => tab.id === requestedTab)?.id ?? 'order';
   const requestedRestaurant = searchParams.get('restaurant');
   const requestedRestaurantId = searchParams.get('restaurantId') ?? (requestedRestaurant && /^[0-9a-f-]{36}$/i.test(requestedRestaurant) ? requestedRestaurant : null);
-  const isBurgerKingDemo = requestedRestaurant === 'bk-loire' || requestedRestaurantId === burgerKingDemoRestaurantId;
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(initialTab);
   const [userRole, setUserRole] = useState<UserRole>('directeur');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [enterpriseCatalog, setEnterpriseCatalog] = useState<CatalogProduct[]>([]);
-  const [agentWelcome, setAgentWelcome] = useState(isBurgerKingDemo ? "Bonjour et bienvenue chez Burger King Loire. Que puis-je préparer pour vous aujourd'hui ?" : "Bonjour et bienvenue à La Piazza République. Que puis-je préparer pour vous aujourd'hui ?");
+  const [agentWelcome, setAgentWelcome] = useState("Bonjour et bienvenue à La Piazza République. Que puis-je préparer pour vous aujourd'hui ?");
   const [agentRules, setAgentRules] = useState<Array<[string, boolean]>>(initialAgentRules);
-  const restaurantName = isBurgerKingDemo ? 'Burger King Loire' : searchParams.get('restaurantName') ?? demoRestaurantName;
-  const restaurantId = isBurgerKingDemo ? burgerKingDemoRestaurantId : requestedRestaurantId ?? demoRestaurantId;
+  const restaurantName = searchParams.get('restaurantName') ?? demoRestaurantName;
+  const restaurantId = requestedRestaurantId ?? demoRestaurantId;
   const [authOpen, setAuthOpen] = useState(false);
   const [accountEmail, setAccountEmail] = useState('');
   const [authNotice, setAuthNotice] = useState('');
@@ -2469,10 +2450,8 @@ export default function Home() {
     const rows = await fetchRestaurantProducts(restaurantId);
     if (rows && rows.length > 0) {
       setEnterpriseCatalog(rows.map(mapRestaurantProduct));
-    } else if (isBurgerKingDemo) {
-      setEnterpriseCatalog(initialCatalog.map(product => ({ ...product })));
     }
-  }, [isBurgerKingDemo, restaurantId]);
+  }, [restaurantId]);
   useEffect(() => {
     const timer = window.setTimeout(() => void reloadRestaurantCatalog(), 0);
     return () => window.clearTimeout(timer);
@@ -2493,7 +2472,7 @@ export default function Home() {
     if (!isSupabaseConfigured) return { ok: true };
     return deleteRestaurantProduct(restaurantId, productId);
   }, [restaurantId]);
-  const visibleCatalog = enterpriseCatalog.length > 0 ? enterpriseCatalog : isBurgerKingDemo ? initialCatalog : enterpriseCatalog;
+  const visibleCatalog = enterpriseCatalog;
   const active = workspaceTabs.find(tab => tab.id === activeTab) ?? workspaceTabs[0];
   const openAccount = () => {
     setAuthOpen(true);
@@ -2516,12 +2495,12 @@ export default function Home() {
     <div className={`min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid ${sidebarCollapsed ? 'lg:grid-cols-[88px_1fr]' : 'lg:grid-cols-[268px_1fr]'}`}>
       <aside className="drivevoice-sidebar relative flex flex-col border-b border-[#223a2c] bg-[#0b1f14] pb-4 text-white shadow-[12px_0_40px_rgba(7,26,17,.08)] lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:min-h-0 lg:overflow-hidden lg:border-b-0 lg:border-r lg:pb-0">
         <div className={`flex items-center justify-between px-5 py-5 lg:px-5 lg:py-7 ${sidebarCollapsed ? 'lg:flex-col lg:gap-5' : 'lg:block'}`}><Link href="/" aria-label="Accueil DriveVoice" className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black shadow-[0_8px_24px_rgba(255,90,54,.22)]">D</span><div className={sidebarCollapsed ? 'lg:hidden' : ''}><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></Link><div className="flex items-center gap-2"><span className={`rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a] ${sidebarCollapsed ? 'lg:hidden' : ''}`}>● Live</span><button onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} className="hidden h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-sm font-black transition hover:bg-white/10 lg:grid" aria-label={sidebarCollapsed ? 'Développer la barre latérale' : 'Réduire la barre latérale'}>{sidebarCollapsed ? '→' : '←'}</button></div></div>
-        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? (isBurgerKingDemo ? 'BK' : 'LP') : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>{restaurantName}</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>{isBurgerKingDemo ? 'Catalogue BK France · Démo' : 'Drive n°04 · Voie A'}</p></div></div>
+        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? 'LP' : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>{restaurantName}</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>Drive n°04 · Voie A</p></div></div>
         <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:min-h-0 lg:flex-1 lg:block lg:space-y-1 lg:overflow-y-auto lg:overscroll-contain ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.filter(tab => userRole === 'directeur' || (userRole === 'manager' && !restrictedTabsForManager.includes(tab.id)) || (userRole === 'operateur' && !restrictedTabsForOperateur.includes(tab.id))).map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
         <div className={`hidden border-t border-white/10 pt-4 lg:mx-4 lg:mb-5 lg:block lg:shrink-0 ${sidebarCollapsed ? 'lg:mx-3' : ''}`}><button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className="w-full rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36]"><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button></div>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
-        {activeTab === 'order' ? <OrderWorkspace products={visibleCatalog} agentWelcome={agentWelcome} agentRules={agentRules} restaurantName={restaurantName} restaurantId={restaurantId} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <RestaurantDashboardPanel restaurantId={restaurantId} />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={visibleCatalog} setProducts={setEnterpriseCatalog} restaurantId={restaurantId} onPersistProduct={persistRestaurantProduct} onDeleteProduct={removeRestaurantProduct} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}</div>}
+        {activeTab === 'order' ? <OrderWorkspace products={visibleCatalog} agentWelcome={agentWelcome} agentRules={agentRules} restaurantName={restaurantName} restaurantId={restaurantId} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <RestaurantDashboardPanel restaurantId={restaurantId} />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={visibleCatalog} setProducts={setEnterpriseCatalog} restaurantId={restaurantId} onPersistProduct={persistRestaurantProduct} onDeleteProduct={removeRestaurantProduct} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}{activeTab === 'support' && <SupportPanel mode="restaurant" restaurantId={restaurantId} />}</div>}
       </main>
       {authOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Créer un compte restaurant"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice restaurants</p><h2 className="mt-2 text-2xl font-black">Créer votre compte</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Recevez un lien sécurisé pour accéder à votre espace restaurant.</p></div><button onClick={() => setAuthOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={createRestaurantAccount} className="mt-7"><label className="text-xs font-black text-[#68736a]">Adresse e-mail professionnelle<input required type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="restaurant@exemple.fr" /></label><button disabled={!isSupabaseConfigured} className="mt-4 w-full rounded-xl bg-[#ff5a36] py-3.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">Recevoir mon lien d’accès</button>{!isSupabaseConfigured && <p className="mt-3 text-xs text-[#b26b00]">L’authentification sera disponible après configuration Supabase.</p>}{authNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{authNotice}</p>}</form><p className="mt-6 text-center text-[10px] text-[#98a099]">Connexion sans mot de passe · lien à usage unique</p></div></div>}
     </div>
