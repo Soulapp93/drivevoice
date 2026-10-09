@@ -152,7 +152,7 @@ export default function HomePage() {
           </nav>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <a href="/login" className="inline-flex min-h-10 items-center rounded-xl border border-[#dce4df] px-2.5 text-[11px] font-bold text-[#17392D] transition hover:border-[#17392D] sm:px-4 sm:text-sm">Se connecter</a>
-            <a href="/demo-request" className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#F06445] px-2.5 text-[11px] font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:gap-2 sm:px-4 sm:text-sm">Voir une démo <Icon name="arrow" className="h-4 w-4" /></a>
+            <a href="/demo-request" className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#F06445] px-2.5 text-[11px] font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:gap-2 sm:px-4 sm:text-sm">Demander une intégration <Icon name="arrow" className="h-4 w-4" /></a>
           </div>
         </div>
         <nav aria-label="Navigation mobile" className="flex flex-wrap justify-center gap-x-5 gap-y-2 border-t border-[#eef0ed] px-4 py-2.5 text-[11px] font-semibold text-[#53655C] lg:hidden sm:px-8 sm:text-xs">
