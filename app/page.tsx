@@ -151,7 +151,7 @@ export default function HomePage() {
             <a href="#faq" className="transition hover:text-[#E85D3D]">FAQ</a>
           </nav>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <Link href="/login" className="hidden min-h-10 items-center rounded-xl border border-[#dce4df] px-4 text-sm font-bold text-[#17392D] transition hover:border-[#17392D] sm:inline-flex">Se connecter</Link>
+            <Link href="/login?mode=admin" className="hidden min-h-10 items-center rounded-xl border border-[#dce4df] px-4 text-sm font-bold text-[#17392D] transition hover:border-[#17392D] sm:inline-flex">Se connecter</Link>
             <Link href="/demo-request" className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-[#F06445] px-3.5 text-xs font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:px-4 sm:text-sm">Voir une démo <Icon name="arrow" className="h-4 w-4" /></Link>
           </div>
         </div>
@@ -343,7 +343,7 @@ export default function HomePage() {
           </div>
           <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
             <Link href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white transition hover:bg-[#d95337]">Demander une démonstration <Icon name="arrow" className="h-4 w-4" /></Link>
-            <Link href="/restaurant" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 px-5 text-sm font-bold text-white transition hover:border-white hover:bg-white/5">Accéder à l’espace restaurant</Link>
+            <Link href="/login?mode=restaurant" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 px-5 text-sm font-bold text-white transition hover:border-white hover:bg-white/5">Accéder à l’espace restaurant</Link>
           </div>
         </div>
       </section>
@@ -361,7 +361,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-[1320px] flex-col gap-6 px-5 py-7 sm:px-8 md:flex-row md:items-center md:justify-between">
           <div><Brand /><p className="mt-2 text-xs text-[#738078]">La commande au drive, plus fluide grâce à la voix.</p></div>
           <nav aria-label="Navigation de pied de page" className="flex flex-wrap gap-x-5 gap-y-3 text-xs font-semibold text-[#53655C]"><a href="#avantages" className="hover:text-[#E85D3D]">Avantages</a><a href="#fonctionnement" className="hover:text-[#E85D3D]">Fonctionnement</a><a href="#integrations" className="hover:text-[#E85D3D]">Intégrations</a><a href="#securite" className="hover:text-[#E85D3D]">Sécurité</a><a href="#faq" className="hover:text-[#E85D3D]">FAQ</a></nav>
-          <Link href="/login" className="inline-flex min-h-10 w-fit items-center gap-2 rounded-xl bg-[#F06445] px-4 text-xs font-bold text-white transition hover:bg-[#d95337]">Se connecter <Icon name="arrow" className="h-4 w-4" /></Link>
+          <Link href="/login?mode=admin" className="inline-flex min-h-10 w-fit items-center gap-2 rounded-xl bg-[#F06445] px-4 text-xs font-bold text-white transition hover:bg-[#d95337]">Se connecter <Icon name="arrow" className="h-4 w-4" /></Link>
         </div>
         <div className="border-t border-[#e5eae6] px-5 py-4 text-center text-[11px] text-[#89938d]">© {new Date().getFullYear()} DriveVoice. Tous droits réservés.</div>
       </footer>

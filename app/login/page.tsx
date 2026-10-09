@@ -123,7 +123,7 @@ export default function LoginPage() {
               <span className="h-px flex-1 bg-[#e7ebe5]" />Accès plateforme<span className="h-px flex-1 bg-[#e7ebe5]" />
             </div>
             <div className="grid gap-3">
-              <button onClick={() => router.push('/admin')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
+              <button onClick={() => router.push('/login?mode=admin')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
                 <span className="text-[10px] font-black uppercase tracking-widest text-[#7b8b81]">Compte plateforme</span>
                 <p className="mt-2 text-sm font-black text-[#132018]">Administrateur DriveVoice</p>
                 <p className="mt-1 text-xs text-[#7d8980]">Connexion administrateur sécurisée</p>
