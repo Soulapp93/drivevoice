@@ -151,8 +151,8 @@ export default function HomePage() {
             <a href="#faq" className="transition hover:text-[#E85D3D]">FAQ</a>
           </nav>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-            <Link href="/login" className="inline-flex min-h-10 items-center rounded-xl border border-[#dce4df] px-2.5 text-[11px] font-bold text-[#17392D] transition hover:border-[#17392D] sm:px-4 sm:text-sm">Se connecter</Link>
-            <Link href="/demo-request" className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#F06445] px-2.5 text-[11px] font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:gap-2 sm:px-4 sm:text-sm">Voir une démo <Icon name="arrow" className="h-4 w-4" /></Link>
+            <a href="/login" className="inline-flex min-h-10 items-center rounded-xl border border-[#dce4df] px-2.5 text-[11px] font-bold text-[#17392D] transition hover:border-[#17392D] sm:px-4 sm:text-sm">Se connecter</a>
+            <a href="/demo-request" className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-[#F06445] px-2.5 text-[11px] font-bold text-white shadow-[0_7px_18px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337] sm:gap-2 sm:px-4 sm:text-sm">Voir une démo <Icon name="arrow" className="h-4 w-4" /></a>
           </div>
         </div>
         <nav aria-label="Navigation mobile" className="flex flex-wrap justify-center gap-x-5 gap-y-2 border-t border-[#eef0ed] px-4 py-2.5 text-[11px] font-semibold text-[#53655C] lg:hidden sm:px-8 sm:text-xs">
@@ -175,7 +175,7 @@ export default function HomePage() {
             <h1 className="text-[clamp(2.45rem,5.4vw,5rem)] font-extrabold leading-[.99] tracking-[-.065em] text-[#17392D]">La prise de commande au drive, <span className="text-[#F06445]">plus fluide grâce à la voix.</span></h1>
             <p className="mt-6 max-w-[510px] text-base leading-7 text-[#56695F] sm:text-lg sm:leading-8">Une solution vocale en temps réel, connectée au catalogue de votre restaurant et conçue pour accompagner vos équipes pendant le service.</p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-              <Link href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white shadow-[0_12px_24px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337]">Voir une démonstration <Icon name="arrow" className="h-4 w-4" /></Link>
+              <a href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-3 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white shadow-[0_12px_24px_rgba(240,100,69,.2)] transition hover:-translate-y-0.5 hover:bg-[#d95337]">Voir une démonstration <Icon name="arrow" className="h-4 w-4" /></a>
               <a href="#fonctionnement" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl border border-[#dce4df] bg-white px-5 text-sm font-bold text-[#17392D] transition hover:border-[#F06445] hover:text-[#d95337]"><Icon name="play" className="h-4 w-4 text-[#F06445]" /> Voir le fonctionnement</a>
             </div>
             <div className="mt-8 grid gap-3 text-xs font-semibold text-[#53655C] sm:flex sm:flex-wrap sm:gap-x-5">
@@ -342,8 +342,8 @@ export default function HomePage() {
             <p className="mt-3 max-w-xl text-sm leading-6 text-white/70">Explorez les démonstrations DriveVoice et voyez comment la voix peut s’intégrer à votre service.</p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row lg:flex-col">
-            <Link href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white transition hover:bg-[#d95337]">Demander une démonstration <Icon name="arrow" className="h-4 w-4" /></Link>
-            <Link href="/login" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 px-5 text-sm font-bold text-white transition hover:border-white hover:bg-white/5">Accéder au back-office</Link>
+            <a href="/demo-request" className="inline-flex min-h-12 items-center justify-center gap-2 rounded-xl bg-[#F06445] px-5 text-sm font-bold text-white transition hover:bg-[#d95337]">Demander une démonstration <Icon name="arrow" className="h-4 w-4" /></a>
+            <a href="/login" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-white/20 px-5 text-sm font-bold text-white transition hover:border-white hover:bg-white/5">Accéder au back-office</a>
           </div>
         </div>
       </section>
@@ -361,7 +361,7 @@ export default function HomePage() {
         <div className="mx-auto flex max-w-[1320px] flex-col gap-6 px-4 py-7 sm:px-8 md:flex-row md:items-center md:justify-between">
           <div><Brand /><p className="mt-2 text-xs text-[#738078]">La commande au drive, plus fluide grâce à la voix.</p></div>
           <nav aria-label="Navigation de pied de page" className="flex flex-wrap gap-x-5 gap-y-3 text-xs font-semibold text-[#53655C]"><a href="#avantages" className="hover:text-[#E85D3D]">Avantages</a><a href="#fonctionnement" className="hover:text-[#E85D3D]">Fonctionnement</a><a href="#integrations" className="hover:text-[#E85D3D]">Intégrations</a><a href="#securite" className="hover:text-[#E85D3D]">Sécurité</a><a href="#faq" className="hover:text-[#E85D3D]">FAQ</a></nav>
-          <Link href="/login" className="inline-flex min-h-10 w-fit items-center gap-2 rounded-xl bg-[#F06445] px-4 text-xs font-bold text-white transition hover:bg-[#d95337]">Se connecter <Icon name="arrow" className="h-4 w-4" /></Link>
+          <a href="/login" className="inline-flex min-h-10 w-fit items-center gap-2 rounded-xl bg-[#F06445] px-4 text-xs font-bold text-white transition hover:bg-[#d95337]">Se connecter <Icon name="arrow" className="h-4 w-4" /></a>
         </div>
         <div className="border-t border-[#e5eae6] px-5 py-4 text-center text-[11px] text-[#89938d]">© {new Date().getFullYear()} DriveVoice. Tous droits réservés.</div>
       </footer>
