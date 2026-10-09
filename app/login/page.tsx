@@ -38,7 +38,7 @@ export default function LoginPage() {
       setNotice('E-mail ou mot de passe incorrect.');
       return;
     }
-    router.push(authMode === 'admin' ? '/admin' : '/restaurant');
+    router.push('/admin');
   };
 
   const updatePassword = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -60,19 +60,19 @@ export default function LoginPage() {
       setNotice(error.message);
       return;
     }
-    setNotice('Mot de passe mis à jour. Redirection vers votre espace…');
-    window.setTimeout(() => router.push('/restaurant'), 900);
+    setNotice('Mot de passe mis à jour. Redirection vers le back-office…');
+    window.setTimeout(() => router.push('/admin'), 900);
   };
 
   return (
     <main className="min-h-screen bg-[#f4f6f1] px-5 py-8 text-[#132018] md:px-10">
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto max-w-5xl">
         <header className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="grid h-11 w-11 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black text-white">D</span>
             <div>
               <p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff5a36]">VOICE</span></p>
-              <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#7c887f]">Platform access</p>
+              <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#7c887f]">Back-office</p>
             </div>
           </div>
           <span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-[10px] font-black text-[#27894a]">Connexion sécurisée</span>
@@ -80,15 +80,15 @@ export default function LoginPage() {
         <div className="grid gap-8 py-16 lg:grid-cols-[1fr_1.05fr] lg:items-center">
           <section>
             <p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice OS</p>
-            <h1 className="mt-4 max-w-xl text-5xl font-black leading-[.98] tracking-[-.06em] md:text-7xl">Un accès clair pour chaque équipe.</h1>
-            <p className="mt-6 max-w-lg text-lg leading-relaxed text-[#68756c]">Connectez-vous à votre espace restaurant ou à l’administration de la plateforme.</p>
+            <h1 className="mt-4 max-w-xl text-5xl font-black leading-[.98] tracking-[-.06em] md:text-6xl">Le centre de contrôle DriveVoice.</h1>
+            <p className="mt-6 max-w-lg text-lg leading-relaxed text-[#68756c]">Connectez-vous au back-office DriveVoice pour piloter les comptes restaurants clients, le pipeline commercial et la messagerie support.</p>
           </section>
           <section className="rounded-[30px] bg-white p-6 shadow-[0_20px_70px_rgba(11,31,20,.08)] md:p-8">
             {resetMode ? (
               <>
                 <p className="text-xs font-black uppercase tracking-widest text-[#8a958d]">Sécurité du compte</p>
                 <h2 className="mt-2 text-2xl font-black">Choisir un nouveau mot de passe</h2>
-                <p className="mt-2 text-sm leading-relaxed text-[#738078]">Définissez un mot de passe sécurisé pour accéder à votre espace DriveVoice.</p>
+                <p className="mt-2 text-sm leading-relaxed text-[#738078]">Définissez un mot de passe sécurisé pour accéder au back-office DriveVoice.</p>
                 <form onSubmit={updatePassword} className="mt-6 space-y-4">
                   <label className="block text-xs font-black text-[#68736a]">
                     Nouveau mot de passe
@@ -104,11 +104,12 @@ export default function LoginPage() {
             ) : (
               <>
                 <p className="text-xs font-black uppercase tracking-widest text-[#8a958d]">Se connecter</p>
-                <h2 className="mt-2 text-2xl font-black">{authMode === 'admin' ? 'Connexion administrateur' : authMode === 'restaurant' ? 'Connexion restaurant' : 'Se connecter avec son mot de passe'}</h2>
+                <h2 className="mt-2 text-2xl font-black">Connexion au back-office DriveVoice</h2>
+                <p className="mt-2 text-sm leading-relaxed text-[#738078]">Compte unique de pilotage de la plateforme. Les espaces restaurants sont accessibles depuis le back-office.</p>
                 <form onSubmit={signIn} className="mt-6 space-y-4">
                   <label className="block text-xs font-black text-[#68736a]">
                     E-mail professionnel
-                    <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" placeholder={authMode === 'admin' ? 'admin@drivevoice.ai' : 'vous@restaurant.fr'} />
+                    <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" placeholder="admin@drivevoice.ai" />
                   </label>
                   <label className="block text-xs font-black text-[#68736a]">
                     Mot de passe
@@ -119,25 +120,6 @@ export default function LoginPage() {
               </>
             )}
             {notice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{notice}</p>}
-            <div className="my-7 flex items-center gap-3 text-[10px] font-black uppercase tracking-widest text-[#a0aaa2]">
-              <span className="h-px flex-1 bg-[#e7ebe5]" />{authMode === 'admin' ? 'Autre accès' : authMode === 'restaurant' ? 'Autre accès' : 'Accès plateforme'}<span className="h-px flex-1 bg-[#e7ebe5]" />
-            </div>
-            <div className="grid gap-3">
-              {authMode !== 'admin' && (
-                <button onClick={() => router.push('/login?mode=admin')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#7b8b81]">Compte plateforme</span>
-                  <p className="mt-2 text-sm font-black text-[#132018]">Administrateur DriveVoice</p>
-                  <p className="mt-1 text-xs text-[#7d8980]">Connexion administrateur sécurisée</p>
-                </button>
-              )}
-              {authMode !== 'restaurant' && (
-                <button onClick={() => router.push('/login?mode=restaurant')} className="rounded-2xl border border-[#dfe5de] bg-white p-4 text-left transition hover:border-[#ff5a36] hover:shadow-md">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-[#7b8b81]">Compte restaurant</span>
-                  <p className="mt-2 text-sm font-black text-[#132018]">Espace restaurant</p>
-                  <p className="mt-1 text-xs text-[#7d8980]">Accès aux commandes, catalogue et compte</p>
-                </button>
-              )}
-            </div>
           </section>
         </div>
       </div>
