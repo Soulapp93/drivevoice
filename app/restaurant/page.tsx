@@ -2391,8 +2391,8 @@ function AgentPanel({ restaurantId, welcome, setWelcome }: { restaurantId: strin
 
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    fetchRestaurantAgentConfig(restaurantId).then(config => {
+    const run = async () => {
+      const config = await fetchRestaurantAgentConfig(restaurantId);
       if (!active) return;
       setWelcome(config.welcome_message);
       setVoice(config.voice);
@@ -2409,7 +2409,8 @@ function AgentPanel({ restaurantId, welcome, setWelcome }: { restaurantId: strin
         { id: 7, title: 'Réponses aux clients', content: 'Être direct, naturel et chaleureux. Éviter les phrases longues et ne pas répéter une information déjà confirmée.', enabled: true },
       ]);
       setLoading(false);
-    });
+    };
+    void run();
     return () => { active = false; };
   }, [restaurantId, setWelcome]);
 

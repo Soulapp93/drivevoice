@@ -32,8 +32,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
         }
       },
       onBasketUpdate: setBasket,
-      onOrderUpdate: options.onOrderUpdate ?? ((order) => setOrderResult(order)),
-      onAudit: options.onAudit,
+      onOrderUpdate: (order) => setOrderResult(order),
     });
     orchestratorRef.current = orchestrator;
     return () => {
