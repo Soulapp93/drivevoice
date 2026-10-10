@@ -17,6 +17,13 @@ export async function POST(request: Request) {
       status: 'partial' | 'final';
       timestamp: number;
     }>;
+    usage?: {
+      total_tokens?: number;
+      input_tokens?: number;
+      output_tokens?: number;
+      input_token_details?: { audio?: number; text?: number };
+      output_token_details?: { audio?: number; text?: number };
+    };
   };
   if (!payload.conversationId || !payload.restaurantId || !Array.isArray(payload.messages) || payload.messages.length === 0) {
     return Response.json({ error: 'Audit de conversation invalide.' }, { status: 400 });
@@ -39,6 +46,7 @@ export async function POST(request: Request) {
       started_at: payload.startedAt ?? null,
       ended_at: payload.endedAt ?? new Date().toISOString(),
       messages: payload.messages,
+      usage: payload.usage ?? null,
     }),
   });
   if (!response.ok) {

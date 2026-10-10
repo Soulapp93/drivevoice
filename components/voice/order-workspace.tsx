@@ -42,6 +42,24 @@ export function OrderWorkspace({ products, agentWelcome, restaurantName = demoRe
     brand: restaurantName,
     restaurantId,
     catalog,
+    onAudit: async (audit) => {
+      try {
+        await fetch('/api/conversations/audit', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            conversationId: audit.conversationId || `${restaurantId}-${Date.now()}`,
+            restaurantId: audit.restaurantId || restaurantId,
+            startedAt: audit.startedAt,
+            endedAt: audit.endedAt,
+            messages: audit.messages,
+            usage: audit.usage,
+          }),
+        });
+      } catch {
+        // audit non bloquant
+      }
+    },
   });
 
   const [pricing, setPricing] = useState<{ acceptingOrders: boolean; discountTotal: number; total: number } | null>(null);

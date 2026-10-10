@@ -17,6 +17,32 @@ export type VoiceOrchestratorOptions = {
   onStatusChange?: (status: VoiceStatus) => void;
   onBasketUpdate?: (basket: { items: unknown[]; total: number; status: string }) => void;
   onOrderUpdate?: (order: { ref: string; status: 'submitted' | 'failed'; message?: string }) => void;
+  onAudit?: (audit: VoiceAuditSnapshot) => void;
+};
+
+export type AuditMessage = {
+  id: string;
+  speaker: 'client' | 'agent';
+  text: string;
+  status: 'partial' | 'final';
+  timestamp: number;
+};
+
+export type AuditUsage = {
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  input_token_details?: { audio?: number; text?: number };
+  output_token_details?: { audio?: number; text?: number };
+};
+
+export type VoiceAuditSnapshot = {
+  conversationId?: string;
+  restaurantId?: string;
+  startedAt: string | null;
+  endedAt: string;
+  messages: AuditMessage[];
+  usage: AuditUsage;
 };
 
 const TOOL_TIMEOUT_MS = 12_000;
@@ -96,6 +122,9 @@ export class VoiceOrchestrator {
   private connectionEpoch = 0;
   private traceId: string;
   private greetingSent = false;
+  private messages: AuditMessage[] = [];
+  private usage: AuditUsage = { total_tokens: 0, input_tokens: 0, output_tokens: 0 };
+  private startedAt: string | null = null;
 
   constructor(options: VoiceOrchestratorOptions = {}) {
     this.options = options;
@@ -146,6 +175,7 @@ export class VoiceOrchestrator {
         this.log('session.open');
         if (!this.greetingSent) {
           this.greetingSent = true;
+          this.startedAt = new Date().toISOString();
           this.requestResponse();
         }
         break;
@@ -239,14 +269,20 @@ export class VoiceOrchestrator {
           response?: {
             status?: string;
             status_details?: { error?: { message?: string }; reason?: string };
+            usage?: AuditUsage;
           };
           status?: string;
           status_details?: { error?: { message?: string }; reason?: string };
+          usage?: AuditUsage;
         } | undefined;
         const responseStatus = rawResponse?.response?.status ?? rawResponse?.status;
         const responseError = rawResponse?.response?.status_details?.error?.message
           ?? rawResponse?.status_details?.error?.message
           ?? (responseStatus === 'incomplete' ? 'La réponse vocale a été interrompue.' : undefined);
+        if (payload.type === 'response.done') {
+          const usage = rawResponse?.response?.usage ?? rawResponse?.usage;
+          if (usage) this.accumulateUsage(usage);
+        }
         this.log('response.done', { responseId: payload.responseId, status: responseStatus ?? status, errorType: responseError });
         this.updateStatus({
           conversation: 'listening',
@@ -392,6 +428,29 @@ export class VoiceOrchestrator {
     return labels.length > 0 ? labels : undefined;
   }
 
+  getAuditData(): VoiceAuditSnapshot {
+    return {
+      conversationId: this.options.conversationId,
+      restaurantId: this.options.restaurantId,
+      startedAt: this.startedAt,
+      endedAt: new Date().toISOString(),
+      messages: this.messages.slice(),
+      usage: { ...this.usage },
+    };
+  }
+
+  clearAuditData() {
+    this.messages = [];
+    this.usage = { total_tokens: 0, input_tokens: 0, output_tokens: 0 };
+    this.startedAt = null;
+  }
+
+  private accumulateUsage(usage: AuditUsage) {
+    this.usage.total_tokens += usage.total_tokens || 0;
+    this.usage.input_tokens += usage.input_tokens || 0;
+    this.usage.output_tokens += usage.output_tokens || 0;
+  }
+
   private handleConnectionError(message: string) {
     this.updateStatus({ connection: 'error', conversation: 'error', error: message });
   }
@@ -416,6 +475,14 @@ export class VoiceOrchestrator {
   }
 
   stop() {
+    const hadActivity = this.startedAt !== null || this.usage.total_tokens > 0;
+    if (hadActivity) {
+      try {
+        this.options.onAudit?.(this.getAuditData());
+      } catch {
+        // ignore audit callback errors
+      }
+    }
     this.connectionEpoch += 1;
     this.session.stop();
     this.responseActive = false;
@@ -424,6 +491,7 @@ export class VoiceOrchestrator {
     this.handledToolCalls.clear();
     this.greetingSent = false;
     this.audioElement = null;
+    this.clearAuditData();
     this.updateStatus({ connection: 'idle', conversation: 'idle', error: undefined });
   }
 

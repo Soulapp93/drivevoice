@@ -10,6 +10,7 @@ import { calculateCatalogPrice, validateCatalogSelection } from '@/lib/catalog-r
 import { RealtimeResponseController, type ConversationState } from '@/lib/realtime/session-controller';
 import { applyUpdateOrder, buildRealtimeToolDefinitions, createIdempotencyKey, jsonToolOutput, normalizeCatalog, parseUpdateOrderArguments, type BasketSnapshot, type ToolResult } from '@/lib/realtime/tool-protocol';
 import { logRealtimeEvent } from '@/lib/realtime/logging';
+import { fetchRestaurantAgentConfig, upsertRestaurantAgentConfig, type AgentKnowledgeItem } from '@/lib/supabase/agent-config';
 import { OrderWorkspace as VoiceOrderWorkspace } from '@/components/voice/order-workspace';
 import { RestaurantDashboardPanel } from '@/components/restaurant-dashboard-panel';
 import { SupportPanel } from '@/components/support-panel';
@@ -297,7 +298,7 @@ function SectionHeading({ eyebrow, title, description, action }: { eyebrow: stri
   );
 }
 
-function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise<void> }) {
+function IntegrationsPanel({ restaurantId, onCatalogSynced }: { restaurantId: string; onCatalogSynced: () => Promise<void> }) {
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success'>('idle');
   const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [hubriseMessage, setHubriseMessage] = useState('');
@@ -307,7 +308,6 @@ function IntegrationsPanel({ onCatalogSynced }: { onCatalogSynced: () => Promise
   const [orderTestMessage, setOrderTestMessage] = useState('');
   const [ordersSentCount, setOrdersSentCount] = useState<number>(0);
   const [disconnecting, setDisconnecting] = useState(false);
-  const restaurantId = demoRestaurantId;
 
   const loadStatus = useCallback(async () => {
     try {
@@ -2373,24 +2373,46 @@ function ingredientVisual(name: string) {
   return { icon: '●', background: '#eadcca' };
 }
 
-function AgentPanel({ welcome, setWelcome }: { welcome: string; setWelcome: React.Dispatch<React.SetStateAction<string>> }) {
+function AgentPanel({ restaurantId, welcome, setWelcome }: { restaurantId: string; welcome: string; setWelcome: React.Dispatch<React.SetStateAction<string>> }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [voice, setVoice] = useState('Marin — naturelle');
+  const [tone, setTone] = useState('Chaleureux et efficace');
+  const [language, setLanguage] = useState('Français');
   const [speechRate, setSpeechRate] = useState(1);
-  const [knowledge, setKnowledge] = useState([
-    { id: 1, title: 'Horaires du restaurant', content: 'Ouvert du lundi au jeudi de 09:00 à 00:00, et du vendredi au dimanche de 09:00 à 01:00.', enabled: true },
-    { id: 2, title: 'Paiements acceptés', content: 'Carte bancaire, espèces, titres-restaurant, Apple Pay et Google Pay au guichet de paiement.', enabled: true },
-    { id: 3, title: 'Allergènes', content: 'Ne jamais donner de diagnostic. Informer le client que les 14 allergènes majeurs sont consultables et proposer un transfert à un équipier.', enabled: true },
-    { id: 4, title: 'Règles de prise de commande', content: 'Pour un menu, confirmer dans cet ordre : taille, sandwich, accompagnement, boisson, sauces puis suppléments.', enabled: true },
-    { id: 5, title: 'Compte de fidélité', content: 'Le client peut présenter sa carte ou son QR code au paiement pour cumuler ses avantages.', enabled: true },
-    { id: 6, title: 'Situations spécifiques et fréquentes', content: 'En cas de demande imprécise, poser une seule question courte à la fois. Après deux incompréhensions, transférer à un équipier.', enabled: true },
-    { id: 7, title: 'Réponses aux clients', content: 'Être direct, naturel et chaleureux. Éviter les phrases longues et ne pas répéter une information déjà confirmée.', enabled: true },
-  ]);
+  const [knowledge, setKnowledge] = useState<AgentKnowledgeItem[]>([]);
   const [knowledgeQuery, setKnowledgeQuery] = useState('');
   const [openKnowledge, setOpenKnowledge] = useState<number | null>(1);
   const [addingKnowledge, setAddingKnowledge] = useState(false);
   const [editingKnowledge, setEditingKnowledge] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState({ title: '', content: '' });
   const [newKnowledge, setNewKnowledge] = useState({ title: '', content: '' });
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    fetchRestaurantAgentConfig(restaurantId).then(config => {
+      if (!active) return;
+      setWelcome(config.welcome_message);
+      setVoice(config.voice);
+      setTone(config.tone);
+      setLanguage(config.language);
+      setSpeechRate(config.speech_rate);
+      setKnowledge(config.knowledge_base.length ? config.knowledge_base : [
+        { id: 1, title: 'Horaires du restaurant', content: 'Ouvert du lundi au jeudi de 09:00 à 00:00, et du vendredi au dimanche de 09:00 à 01:00.', enabled: true },
+        { id: 2, title: 'Paiements acceptés', content: 'Carte bancaire, espèces, titres-restaurant, Apple Pay et Google Pay au guichet de paiement.', enabled: true },
+        { id: 3, title: 'Allergènes', content: 'Ne jamais donner de diagnostic. Informer le client que les 14 allergènes majeurs sont consultables et proposer un transfert à un équipier.', enabled: true },
+        { id: 4, title: 'Règles de prise de commande', content: 'Pour un menu, confirmer dans cet ordre : taille, sandwich, accompagnement, boisson, sauces puis suppléments.', enabled: true },
+        { id: 5, title: 'Compte de fidélité', content: 'Le client peut présenter sa carte ou son QR code au paiement pour cumuler ses avantages.', enabled: true },
+        { id: 6, title: 'Situations spécifiques et fréquentes', content: 'En cas de demande imprécise, poser une seule question courte à la fois. Après deux incompréhensions, transférer à un équipier.', enabled: true },
+        { id: 7, title: 'Réponses aux clients', content: 'Être direct, naturel et chaleureux. Éviter les phrases longues et ne pas répéter une information déjà confirmée.', enabled: true },
+      ]);
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [restaurantId, setWelcome]);
+
   const visibleKnowledge = knowledge.filter(item => `${item.title} ${item.content}`.toLowerCase().includes(knowledgeQuery.toLowerCase()));
   const addKnowledge = () => {
     if (!newKnowledge.title.trim() || !newKnowledge.content.trim()) return;
@@ -2400,7 +2422,7 @@ function AgentPanel({ welcome, setWelcome }: { welcome: string; setWelcome: Reac
     setAddingKnowledge(false);
     setOpenKnowledge(id);
   };
-  const startEditingKnowledge = (item: (typeof knowledge)[number]) => {
+  const startEditingKnowledge = (item: AgentKnowledgeItem) => {
     setEditingKnowledge(item.id);
     setEditDraft({ title: item.title, content: item.content });
     setOpenKnowledge(item.id);
@@ -2410,12 +2432,37 @@ function AgentPanel({ welcome, setWelcome }: { welcome: string; setWelcome: Reac
     setKnowledge(current => current.map(item => item.id === editingKnowledge ? { ...item, ...editDraft } : item));
     setEditingKnowledge(null);
   };
-  const save = () => { setSaved(true); window.setTimeout(() => setSaved(false), 1800); };
+  const save = async () => {
+    setSaving(true);
+    const result = await upsertRestaurantAgentConfig(restaurantId, {
+      welcome_message: welcome,
+      voice,
+      tone,
+      language,
+      speech_rate: speechRate,
+      knowledge_base: knowledge,
+    });
+    setSaving(false);
+    if (result.ok) {
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 1800);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div>
+        <SectionHeading eyebrow="Voix & connaissances" title="Configuration de l’agent" description="Chargement de la configuration de l’agent pour cet établissement…" />
+        <section className={`${panelCard} p-10 text-center`}><p className="text-sm font-semibold text-[#7f8981]">Chargement…</p></section>
+      </div>
+    );
+  }
+
   return (
     <div>
-      <SectionHeading eyebrow="Voix & connaissances" title="Configuration de l’agent" description="Configurez l’identité vocale et centralisez toutes les règles métier dans une base de connaissances unique." action={<button onClick={save} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">{saved ? '✓ Agent mis à jour' : 'Publier la configuration'}</button>} />
+      <SectionHeading eyebrow="Voix & connaissances" title="Configuration de l’agent" description="Configurez l’identité vocale et centralisez toutes les règles métier dans une base de connaissances unique. Les modifications sont synchronisées avec l’espace restaurant." action={<button onClick={save} disabled={saving} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:opacity-60">{saving ? 'Publication…' : saved ? '✓ Agent mis à jour' : 'Publier la configuration'}</button>} />
       <section className={`${panelCard} overflow-hidden`}>
-        <div className="p-6 md:p-7"><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Identité vocale</p><h2 className="mt-2 text-xl font-black">Accueil et personnalité</h2><p className="mt-1 text-xs text-[#7f8981]">Définissez la façon dont l’agent accueille et accompagne chaque client.</p></div><span className="rounded-full bg-[#e3f6e8] px-3 py-1 text-[10px] font-black text-[#27894a]">● Actif</span></div><label className="mt-6 block text-xs font-bold text-[#68736a]">Message de bienvenue<textarea className="mt-2 min-h-24 w-full rounded-2xl border border-[#dfe4dc] bg-white p-4 text-sm font-semibold leading-relaxed outline-none focus:border-[#ff6a45] focus:ring-4 focus:ring-[#ff6a45]/10" value={welcome} onChange={event=>setWelcome(event.target.value)} /></label><div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-xs font-bold text-[#68736a]">Voix<select className={`${fieldClass} mt-2`}><option>Marin — naturelle</option><option>Cedar — posée</option></select></label><label className="text-xs font-bold text-[#68736a]">Ton<select className={`${fieldClass} mt-2`}><option>Chaleureux et efficace</option><option>Très concis</option><option>Premium</option></select></label><label className="text-xs font-bold text-[#68736a]">Langue<select className={`${fieldClass} mt-2`}><option>Français</option><option>Français + anglais</option></select></label><label className="text-xs font-bold text-[#68736a]"><span className="flex justify-between"><span>Vitesse d’élocution</span><strong className="text-[#ff5a36]">{speechRate.toFixed(2)}×</strong></span><input aria-label="Vitesse d’élocution" type="range" min="0.75" max="1.25" step="0.05" value={speechRate} onChange={event=>setSpeechRate(Number(event.target.value))} className="mt-4 w-full accent-[#ff5a36]" /><span className="mt-1 flex justify-between text-[9px] font-semibold text-[#9aa29b]"><span>Posée</span><span>Rapide</span></span></label></div></div>
+        <div className="p-6 md:p-7"><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Identité vocale</p><h2 className="mt-2 text-xl font-black">Accueil et personnalité</h2><p className="mt-1 text-xs text-[#7f8981]">Définissez la façon dont l’agent accueille et accompagne chaque client.</p></div><span className="rounded-full bg-[#e3f6e8] px-3 py-1 text-[10px] font-black text-[#27894a]">● Actif</span></div><label className="mt-6 block text-xs font-bold text-[#68736a]">Message de bienvenue<textarea className="mt-2 min-h-24 w-full rounded-2xl border border-[#dfe4dc] bg-white p-4 text-sm font-semibold leading-relaxed outline-none focus:border-[#ff6a45] focus:ring-4 focus:ring-[#ff6a45]/10" value={welcome} onChange={event=>setWelcome(event.target.value)} /></label><div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4"><label className="text-xs font-bold text-[#68736a]">Voix<select className={`${fieldClass} mt-2`} value={voice} onChange={event=>setVoice(event.target.value)}><option>Marin — naturelle</option><option>Cedar — posée</option></select></label><label className="text-xs font-bold text-[#68736a]">Ton<select className={`${fieldClass} mt-2`} value={tone} onChange={event=>setTone(event.target.value)}><option>Chaleureux et efficace</option><option>Très concis</option><option>Premium</option></select></label><label className="text-xs font-bold text-[#68736a]">Langue<select className={`${fieldClass} mt-2`} value={language} onChange={event=>setLanguage(event.target.value)}><option>Français</option><option>Français + anglais</option></select></label><label className="text-xs font-bold text-[#68736a]"><span className="flex justify-between"><span>Vitesse d’élocution</span><strong className="text-[#ff5a36]">{speechRate.toFixed(2)}×</strong></span><input aria-label="Vitesse d’élocution" type="range" min="0.75" max="1.25" step="0.05" value={speechRate} onChange={event=>setSpeechRate(Number(event.target.value))} className="mt-4 w-full accent-[#ff5a36]" /><span className="mt-1 flex justify-between text-[9px] font-semibold text-[#9aa29b]"><span>Posée</span><span>Rapide</span></span></label></div></div>
         <div className="border-t border-[#e7eae5]">
           <div className="border-b border-[#e7eae5] p-6"><div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Base de connaissances métier</p><h2 className="mt-2 text-xl font-black">Connaissances de l’agent</h2><p className="mt-1 text-xs leading-relaxed text-[#7f8981]">Organisez les informations utilisées par l’agent pour répondre sans rien inventer.</p></div><button onClick={()=>setAddingKnowledge(value=>!value)} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 py-3 text-xs font-black text-white">{addingKnowledge ? 'Fermer' : '＋ Créer une connaissance'}</button></div>
             <div className="mt-5"><input aria-label="Rechercher une connaissance" className={fieldClass} placeholder="Rechercher une connaissance…" value={knowledgeQuery} onChange={event=>setKnowledgeQuery(event.target.value)} /></div>
@@ -2442,6 +2489,7 @@ export default function Home() {
   const [agentRules, setAgentRules] = useState<Array<[string, boolean]>>(initialAgentRules);
   const restaurantName = searchParams.get('restaurantName') ?? demoRestaurantName;
   const restaurantId = requestedRestaurantId ?? demoRestaurantId;
+  const fromAdmin = searchParams.get('from') === 'admin';
   const [authOpen, setAuthOpen] = useState(false);
   const [accountEmail, setAccountEmail] = useState('');
   const [authNotice, setAuthNotice] = useState('');
@@ -2456,6 +2504,14 @@ export default function Home() {
     const timer = window.setTimeout(() => void reloadRestaurantCatalog(), 0);
     return () => window.clearTimeout(timer);
   }, [reloadRestaurantCatalog]);
+  useEffect(() => {
+    let active = true;
+    fetchRestaurantAgentConfig(restaurantId).then(config => {
+      if (!active) return;
+      setAgentWelcome(config.welcome_message);
+    });
+    return () => { active = false; };
+  }, [restaurantId]);
   const persistRestaurantProduct = useCallback(async (product: CatalogProduct) => {
     if (!isSupabaseConfigured) return { ok: true };
     return upsertRestaurantProduct(restaurantId, {
@@ -2495,12 +2551,12 @@ export default function Home() {
     <div className={`min-h-screen bg-[#f4f6f1] text-[#132018] lg:grid ${sidebarCollapsed ? 'lg:grid-cols-[88px_1fr]' : 'lg:grid-cols-[268px_1fr]'}`}>
       <aside className="drivevoice-sidebar relative flex flex-col border-b border-[#223a2c] bg-[#0b1f14] pb-4 text-white shadow-[12px_0_40px_rgba(7,26,17,.08)] lg:sticky lg:top-0 lg:h-screen lg:max-h-screen lg:min-h-0 lg:overflow-hidden lg:border-b-0 lg:border-r lg:pb-0">
         <div className={`flex items-center justify-between px-5 py-5 lg:px-5 lg:py-7 ${sidebarCollapsed ? 'lg:flex-col lg:gap-5' : 'lg:block'}`}><Link href="/" aria-label="Accueil DriveVoice" className="flex items-center gap-3"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-lg font-black shadow-[0_8px_24px_rgba(255,90,54,.22)]">D</span><div className={sidebarCollapsed ? 'lg:hidden' : ''}><p className="font-black tracking-[-.04em]">DRIVE<span className="text-[#ff7556]">VOICE</span></p><p className="text-[9px] font-bold uppercase tracking-[.18em] text-white/45">Enterprise OS</p></div></Link><div className="flex items-center gap-2"><span className={`rounded-full bg-[#173625] px-3 py-1 text-[9px] font-black uppercase text-[#68d48a] ${sidebarCollapsed ? 'lg:hidden' : ''}`}>● Live</span><button onClick={() => setSidebarCollapsed((collapsed) => !collapsed)} className="hidden h-9 w-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-sm font-black transition hover:bg-white/10 lg:grid" aria-label={sidebarCollapsed ? 'Développer la barre latérale' : 'Réduire la barre latérale'}>{sidebarCollapsed ? '→' : '←'}</button></div></div>
-        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? 'LP' : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>{restaurantName}</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>Drive n°04 · Voie A</p></div></div>
+        <div className={`hidden px-5 lg:block ${sidebarCollapsed ? 'lg:px-3' : ''}`}><div className={`rounded-2xl border border-white/10 bg-white/5 p-4 ${sidebarCollapsed ? 'text-center' : ''}`}><p className="text-[9px] font-black uppercase tracking-[.17em] text-white/40">{sidebarCollapsed ? 'LP' : 'Restaurant connecté'}</p><p className={`mt-2 text-sm font-black ${sidebarCollapsed ? 'hidden' : ''}`}>{restaurantName}</p><p className={`mt-1 text-[10px] text-white/45 ${sidebarCollapsed ? 'hidden' : ''}`}>Drive n°04 · Voie A</p>{fromAdmin && <Link href="/admin" className={`mt-3 inline-flex items-center justify-center gap-2 rounded-xl bg-[#ff5a36] px-3 py-2 text-[10px] font-black text-white transition hover:bg-[#ff7657] ${sidebarCollapsed ? 'hidden' : ''}`}>← Retour au back-office</Link>}</div>{fromAdmin && sidebarCollapsed && <Link href="/admin" className="mt-3 grid h-9 w-9 place-items-center rounded-xl bg-[#ff5a36] text-xs font-black text-white" title="Retour au back-office">←</Link>}</div>
         <nav className={`flex gap-1 overflow-x-auto px-3 pb-4 lg:mt-7 lg:min-h-0 lg:flex-1 lg:block lg:space-y-1 lg:overflow-y-auto lg:overscroll-contain ${sidebarCollapsed ? 'lg:px-3' : 'lg:px-4'}`} aria-label="Espaces de travail DriveVoice">{workspaceTabs.filter(tab => userRole === 'directeur' || (userRole === 'manager' && !restrictedTabsForManager.includes(tab.id)) || (userRole === 'operateur' && !restrictedTabsForOperateur.includes(tab.id))).map(tab=><button key={tab.id} onClick={()=>setActiveTab(tab.id)} title={sidebarCollapsed ? tab.label : undefined} className={`flex shrink-0 items-center gap-3 rounded-xl px-4 py-3 text-left text-xs font-black transition lg:w-full ${sidebarCollapsed ? 'lg:justify-center lg:px-2' : ''} ${activeTab===tab.id?'bg-white text-[#102019] shadow-lg':'text-white/55 hover:bg-white/5 hover:text-white'}`}><span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base ${activeTab===tab.id?'bg-[#ff5a36] text-white':'bg-white/5'}`}>{tab.icon}</span><span className={sidebarCollapsed ? 'lg:hidden' : ''}><span className="block">{tab.short}</span><span className={`hidden text-[9px] font-semibold lg:block ${activeTab===tab.id?'text-[#6f7972]':'text-white/30'}`}>{tab.label}</span></span></button>)}</nav>
         <div className={`hidden border-t border-white/10 pt-4 lg:mx-4 lg:mb-5 lg:block lg:shrink-0 ${sidebarCollapsed ? 'lg:mx-3' : ''}`}><button onClick={signOut} title={sidebarCollapsed ? 'Se déconnecter' : undefined} className="w-full rounded-2xl border border-white/10 p-4 text-left transition hover:border-[#ff7556] hover:bg-[#ff5a36]"><div className={`flex items-center gap-3 ${sidebarCollapsed ? 'justify-center' : ''}`}><span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#ffc647] text-xs font-black text-[#172019]">AM</span><div className={sidebarCollapsed ? 'hidden' : ''}><p className="text-xs font-black">Se déconnecter</p><p className="text-[9px] text-white/40">Retour à la page de connexion</p></div></div></button></div>
       </aside>
       <main className="min-w-0"><header className="sticky top-0 z-30 flex items-center justify-between border-b border-[#e1e5de] bg-[#f4f6f1]/90 px-5 py-4 backdrop-blur-xl md:px-8"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#8a938c]">DriveVoice / {active.short}</p><p className="mt-1 text-sm font-black">{active.label}</p></div><div className="flex items-center gap-3"><span className="hidden rounded-full border border-[#dce2da] bg-white px-3 py-2 text-[10px] font-black text-[#2b8c4d] md:inline">● Tous les systèmes opérationnels</span><button aria-label="Notifications" className="grid h-10 w-10 place-items-center rounded-xl border border-[#dce2da] bg-white">•</button></div></header>
-        {activeTab === 'order' ? <OrderWorkspace products={visibleCatalog} agentWelcome={agentWelcome} agentRules={agentRules} restaurantName={restaurantName} restaurantId={restaurantId} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <RestaurantDashboardPanel restaurantId={restaurantId} />}{activeTab === 'integrations' && <IntegrationsPanel onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={visibleCatalog} setProducts={setEnterpriseCatalog} restaurantId={restaurantId} onPersistProduct={persistRestaurantProduct} onDeleteProduct={removeRestaurantProduct} />}{activeTab === 'agent' && <AgentPanel welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}{activeTab === 'support' && <SupportPanel mode="restaurant" restaurantId={restaurantId} />}</div>}
+        {activeTab === 'order' ? <OrderWorkspace products={visibleCatalog} agentWelcome={agentWelcome} agentRules={agentRules} restaurantName={restaurantName} restaurantId={restaurantId} /> : <div className="mx-auto max-w-[1500px] p-5 md:p-8">{activeTab === 'dashboard' && <RestaurantDashboardPanel restaurantId={restaurantId} />}{activeTab === 'integrations' && <IntegrationsPanel restaurantId={restaurantId} onCatalogSynced={reloadRestaurantCatalog} />}{activeTab === 'catalog' && <RestaurantMenuBuilderPanel products={visibleCatalog} setProducts={setEnterpriseCatalog} restaurantId={restaurantId} onPersistProduct={persistRestaurantProduct} onDeleteProduct={removeRestaurantProduct} />}{activeTab === 'agent' && <AgentPanel restaurantId={restaurantId} welcome={agentWelcome} setWelcome={setAgentWelcome} />}{activeTab === 'account' && <AccountPanel />}{activeTab === 'support' && <SupportPanel mode="restaurant" restaurantId={restaurantId} />}</div>}
       </main>
       {authOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/65 p-4" role="dialog" aria-modal="true" aria-label="Créer un compte restaurant"><div className="w-full max-w-md rounded-[28px] bg-white p-7 shadow-2xl md:p-9"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice restaurants</p><h2 className="mt-2 text-2xl font-black">Créer votre compte</h2><p className="mt-2 text-sm leading-relaxed text-[#738078]">Recevez un lien sécurisé pour accéder à votre espace restaurant.</p></div><button onClick={() => setAuthOpen(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] text-lg font-black" aria-label="Fermer">×</button></div><form onSubmit={createRestaurantAccount} className="mt-7"><label className="text-xs font-black text-[#68736a]">Adresse e-mail professionnelle<input required type="email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} className={`${fieldClass} mt-2`} placeholder="restaurant@exemple.fr" /></label><button disabled={!isSupabaseConfigured} className="mt-4 w-full rounded-xl bg-[#ff5a36] py-3.5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-50">Recevoir mon lien d’accès</button>{!isSupabaseConfigured && <p className="mt-3 text-xs text-[#b26b00]">L’authentification sera disponible après configuration Supabase.</p>}{authNotice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{authNotice}</p>}</form><p className="mt-6 text-center text-[10px] text-[#98a099]">Connexion sans mot de passe · lien à usage unique</p></div></div>}
     </div>

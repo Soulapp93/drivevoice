@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { VoiceOrchestrator, type VoiceStatus } from './voice-orchestrator';
+import { VoiceOrchestrator, type VoiceAuditSnapshot, type VoiceStatus } from './voice-orchestrator';
 import type { CatalogEntry } from './basket-manager';
 import { logRealtimeEvent } from '@/lib/realtime/logging';
 
@@ -8,6 +8,8 @@ export type UseVoiceOptions = {
   restaurantId?: string;
   conversationId?: string;
   catalog?: CatalogEntry[];
+  onOrderUpdate?: (order: { ref: string; status: 'submitted' | 'failed'; message?: string }) => void;
+  onAudit?: (audit: VoiceAuditSnapshot) => void;
 };
 
 export type OrderResult = { ref: string; status: 'submitted' | 'failed'; message?: string };
@@ -30,7 +32,8 @@ export function useVoice(options: UseVoiceOptions = {}) {
         }
       },
       onBasketUpdate: setBasket,
-      onOrderUpdate: setOrderResult,
+      onOrderUpdate: options.onOrderUpdate ?? ((order) => setOrderResult(order)),
+      onAudit: options.onAudit,
     });
     orchestratorRef.current = orchestrator;
     return () => {
@@ -45,8 +48,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
       restaurantId: options.restaurantId,
       conversationId: options.conversationId,
       catalog: options.catalog,
+      onAudit: options.onAudit,
     });
-  }, [options.brand, options.restaurantId, options.conversationId, options.catalog]);
+  }, [options.brand, options.restaurantId, options.conversationId, options.catalog, options.onAudit]);
 
   const start = useCallback(async (audioElement?: HTMLAudioElement) => {
     setIsStarted(true);
