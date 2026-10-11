@@ -30,6 +30,8 @@ export async function POST(request: Request) {
   const managerName = typeof body.managerName === 'string' ? body.managerName.trim() : '';
   const managerEmail = typeof body.managerEmail === 'string' ? body.managerEmail.trim().toLowerCase() : '';
   const managerRole = body.managerRole === 'Manager' ? 'Manager' : body.managerRole === 'Directeur' ? 'Directeur' : '';
+  const allowedPosSystems = ['hubrise', 'deliverect', 'direct_pos'];
+  const posSystem = allowedPosSystems.includes(body.posSystem as string) ? (body.posSystem as string) : 'hubrise';
   if ((!organizationId && !organizationName) || !restaurantName || managerName.length < 2 || managerName.length > 120 || !managerRole || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(managerEmail)) {
     return Response.json({ error: 'Organisation, restaurant, responsable, rôle et e-mail valide sont obligatoires.' }, { status: 400 });
   }
@@ -45,6 +47,7 @@ export async function POST(request: Request) {
       p_manager_name: managerName,
       p_manager_email: managerEmail,
       p_manager_role: managerRole,
+      p_pos_system: posSystem,
     })
     : await context.client.rpc('admin_create_client_account', {
       p_admin_id: context.user.id,
@@ -56,6 +59,7 @@ export async function POST(request: Request) {
       p_manager_name: managerName,
       p_manager_email: managerEmail,
       p_manager_role: managerRole,
+      p_pos_system: posSystem,
     });
   const { data: provisioned, error: provisionError } = provisionedResult;
   if (provisionError || !provisioned) return Response.json({ error: 'La création du compte client a échoué.' }, { status: 502 });

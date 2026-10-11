@@ -6,7 +6,7 @@ import { supabase, supabaseAnonKey, supabaseUrl } from '@/lib/supabase/client';
 import { adminApiRequest } from '@/lib/admin/client';
 import { SupportPanel } from '@/components/support-panel';
 
-type AdminTab = 'overview' | 'restaurants' | 'demos' | 'quality' | 'demo-requests' | 'support' | 'admins';
+type AdminTab = 'overview' | 'restaurants' | 'demos' | 'demo-requests' | 'support' | 'admins';
 type HubRiseStatus = { connected: boolean; status: string; lastSyncAt: string | null; lastError: string | null };
 type RestaurantDetails = { products: number; orders: { day: number; week: number; month: number; total: number }; aiAudits: number | null };
 type VoiceQualityMetrics = { conversations: number; averageDurationMinutes: number; comprehension: { clientMessages: number; rephrasingHints: number; rephrasingRate: number }; usage: { inputTokens: number; outputTokens: number; totalTokens: number }; costEur: number };
@@ -15,14 +15,16 @@ type RestaurantRow = { id: string; name: string; address: string | null; city: s
 type PlatformAdmin = { id: string; user_id: string; full_name: string; role: string; active: boolean; created_at: string };
 type DemoRequest = { id: string; full_name: string; email: string; phone: string; restaurant_name: string; restaurant_count: number; role: string; message: string; received_at: string; status: 'new' | 'contacted' | 'demo' | 'converted' | 'rejected'; assigned_to: string | null; notes: string; updated_at: string; organization_id: string | null };
 type ClientOrganization = { id: string; name: string; active: boolean; created_at: string; restaurants: RestaurantRow[]; organization_members: Array<{ id: string; user_id: string; role: string; active: boolean; created_at: string }>; restaurant_invitations: Array<{ id: string; restaurant_id: string; email: string; full_name: string; role: string; status: string; invited_at: string }> };
-type CreateRestaurantDraft = { name: string; organizationName: string; organizationId: string; address: string; city: string; siret: string; brand: string; phone: string; managerName: string; managerEmail: string; role: string };
+type PosSystem = 'hubrise' | 'deliverect' | 'direct_pos';
+type CreateRestaurantDraft = { name: string; organizationName: string; organizationId: string; address: string; city: string; siret: string; brand: string; phone: string; managerName: string; managerEmail: string; role: string; posSystem: PosSystem };
+type PlatformVoiceQuality = { totalConversations: number; totalRephrasingHints: number; totalClientMessages: number; globalRephrasingRate: number; globalCostEur: number; catalogErrors: Array<{ restaurantId: string; restaurantName: string; errorCount: number }> };
 
 function buildRestaurantWorkspaceUrl(restaurant: { id: string; name: string }, options?: { from?: 'admin'; tab?: string }) {
   const params = new URLSearchParams({ restaurantId: restaurant.id, restaurantName: restaurant.name, tab: options?.tab ?? 'order' });
   if (options?.from === 'admin') params.set('from', 'admin');
   return `/restaurant?${params.toString()}`;
 }
-const tabs: Array<[AdminTab, string, string]> = [['overview', 'Vue d’ensemble', '▥'], ['restaurants', 'Restaurants clients', '▦'], ['demos', 'Restaurants démo', '◇'], ['quality', 'Qualité IA', '◌'], ['demo-requests', 'Demandes d’intégration', '✉'], ['support', 'Messagerie support', '◉'], ['admins', 'Administrateurs internes', '◎']];
+const tabs: Array<[AdminTab, string, string]> = [['overview', 'Vue globale', '▥'], ['restaurants', 'Restaurant client', '▦'], ['demos', 'Restaurant démo', '◇'], ['demo-requests', "Demande d\u2019int\u00e9gration", '✉'], ['support', 'Messagerie support', '◉'], ['admins', 'Administrateur interne', '◎']];
 
 function normalizeRestaurant(row: RestaurantRow): Restaurant {
   const brandName = row.master_brands?.[0]?.name ?? null;
@@ -48,7 +50,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
-  const [draft, setDraft] = useState({ name: '', organizationName: '', organizationId: '', address: '', city: '', siret: '', brand: '', phone: '', managerName: '', managerEmail: '', role: 'Directeur' });
+  const [draft, setDraft] = useState<CreateRestaurantDraft>({ name: '', organizationName: '', organizationId: '', address: '', city: '', siret: '', brand: '', phone: '', managerName: '', managerEmail: '', role: 'Directeur', posSystem: 'hubrise' });
   const [convertingRequestId, setConvertingRequestId] = useState<string | null>(null);
   const [admins, setAdmins] = useState<PlatformAdmin[]>([]);
   const [adminOpen, setAdminOpen] = useState(false);
@@ -174,10 +176,11 @@ export default function AdminPage() {
           managerName: draft.managerName,
           managerEmail: draft.managerEmail,
           managerRole: draft.role,
+          posSystem: draft.posSystem,
         }),
       });
       setCreateOpen(false);
-      setDraft({ name: '', organizationName: '', organizationId: '', address: '', city: '', siret: '', brand: '', phone: '', managerName: '', managerEmail: '', role: 'Directeur' });
+      setDraft({ name: '', organizationName: '', organizationId: '', address: '', city: '', siret: '', brand: '', phone: '', managerName: '', managerEmail: '', role: 'Directeur', posSystem: 'hubrise' });
       await reloadOrganizations();
       setSelected({ id: result.restaurantId, name: draft.name, address: draft.address || null, city: draft.city || null, code: draft.siret || null, brand_id: null, brand_name: null, active: true, created_at: new Date().toISOString() });
       let conversionNotice = '';
@@ -219,8 +222,7 @@ export default function AdminPage() {
       <section className="min-w-0"><header className="sticky top-0 z-20 flex items-center justify-between border-b border-[#dfe5de]/80 bg-[#f4f6f1]/80 px-5 py-5 backdrop-blur-xl md:px-9"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#89938b]">DriveVoice / Back-office</p><h1 className="mt-1 text-lg font-black">{tabs.find(([id]) => id === tab)?.[1]}</h1></div></header><div className="mx-auto max-w-[1500px] p-5 md:p-9">
         {tab === 'overview' && <Overview restaurants={clientRestaurants} activeCount={activeCount} organizations={organizations} />}
         {tab === 'restaurants' && <><RestaurantList restaurants={clientRestaurants} loading={loading} selected={selectedClientRestaurant} setSelected={setSelected} onCreate={() => setCreateOpen(true)} mode="client" description="Portefeuille des établissements clients pour le suivi commercial." /><OrganizationsPortfolio organizations={organizations} /></>}
-        {tab === 'demos' && <RestaurantList restaurants={demoRestaurants} loading={loading} selected={selectedDemoRestaurant} setSelected={setSelected} mode="demo" title="Restaurants démo" eyebrow="Accès aux espaces restaurants" description="Accédez à l’espace restaurant de chaque établissement pour réaliser des tests ou assister un client." emptyMessage="Aucun restaurant enregistré pour le moment." />}
-        {tab === 'quality' && <QualityPanel />}
+        {tab === 'demos' && <RestaurantList restaurants={demoRestaurants} loading={loading} selected={selectedDemoRestaurant} setSelected={setSelected} mode="demo" title="Restaurant démo" eyebrow="Accès aux espaces restaurants" description="Accédez à l'espace restaurant de chaque établissement pour réaliser des tests ou assister un client." emptyMessage="Aucun restaurant enregistré pour le moment." />}
         {tab === 'demo-requests' && <DemoRequestsPanel requests={demoRequests} loading={demoRequestsLoading} error={demoRequestsError} onUpdate={async (id, update) => {
           const result = await adminApiRequest<{ request: Partial<DemoRequest> }>('/api/admin/demo-requests', {
             method: 'PATCH',
@@ -246,58 +248,104 @@ export default function AdminPage() {
 
 function Overview({ restaurants, activeCount, organizations }: { restaurants: Restaurant[]; activeCount: number; organizations: ClientOrganization[] }) {
   const [orderPeriod, setOrderPeriod] = useState<'jour' | 'semaine' | 'mois' | 'année'>('jour');
+  const [voiceQuality, setVoiceQuality] = useState<PlatformVoiceQuality | null>(null);
+  const [voiceQualityLoading, setVoiceQualityLoading] = useState(true);
+  const [voiceQualityError, setVoiceQualityError] = useState('');
+  const [catalogErrorsOpen, setCatalogErrorsOpen] = useState(false);
 
   const periodLabels = { jour: "aujourd'hui", semaine: 'cette semaine', mois: 'ce mois', année: 'cette année' };
+
+  useEffect(() => {
+    let active = true;
+    setVoiceQualityLoading(true);
+    const run = async () => {
+      try {
+        const { data: sessionData } = supabase ? await supabase.auth.getSession() : { data: { session: null } };
+        const token = sessionData.session?.access_token;
+        if (!token) { if (active) { setVoiceQualityError('Session expirée.'); setVoiceQualityLoading(false); } return; }
+        const res = await fetch('/api/admin/platform-voice-quality', { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+        const data = await res.json() as PlatformVoiceQuality & { error?: string };
+        if (!active) return;
+        if (!res.ok) { setVoiceQualityError(data.error ?? 'Impossible de charger les indicateurs vocaux.'); } else { setVoiceQuality(data); setVoiceQualityError(''); }
+      } catch { if (active) setVoiceQualityError('Impossible de charger les indicateurs vocaux.'); }
+      finally { if (active) setVoiceQualityLoading(false); }
+    };
+    void run();
+    return () => { active = false; };
+  }, []);
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">Pilotage plateforme</p>
-          <h2 className="mt-2 text-4xl font-black tracking-[-.05em]">Vue d&apos;ensemble</h2>
+          <h2 className="mt-2 text-4xl font-black tracking-[-.05em]">Vue globale</h2>
           <p className="mt-3 text-sm text-[#738078]">Une lecture réelle de l&apos;activité DriveVoice, alimentée par Supabase.</p>
         </div>
         <span className="rounded-full bg-[#e5f6e9] px-4 py-2 text-xs font-black text-[#27894a]">● Données live</span>
       </div>
 
       <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {/* Carte 1 : Nombre de restaurants clients */}
         <div className="rounded-3xl bg-white p-6 shadow-sm">
           <p className="text-xs font-bold text-[#89948b]">Restaurants clients</p>
           <p className="mt-4 text-4xl font-black">{restaurants.length}</p>
           <p className="mt-2 text-xs text-[#7d897f]">{activeCount} actifs</p>
         </div>
-
         <div className="rounded-3xl bg-white p-6 shadow-sm">
           <p className="text-xs font-bold text-[#89948b]">Organisations clientes</p>
           <p className="mt-4 text-4xl font-black">{organizations.length}</p>
           <p className="mt-2 text-xs text-[#7d897f]">{organizations.filter((organization) => organization.active).length} actives · {restaurants.length} restaurants rattachés</p>
         </div>
-
-        {/* Carte 3 : Commandes totales avec filtre */}
         <div className="rounded-3xl bg-white p-6 shadow-sm">
           <div className="flex items-start justify-between">
             <p className="text-xs font-bold text-[#89948b]">Commandes totales</p>
-            <select
-              value={orderPeriod}
-              onChange={(e) => setOrderPeriod(e.target.value as typeof orderPeriod)}
-              className="rounded-lg border border-[#dfe5de] bg-[#f8faf7] px-2 py-1 text-[10px] font-black outline-none"
-            >
-              <option value="jour">Jour</option>
-              <option value="semaine">Semaine</option>
-              <option value="mois">Mois</option>
-              <option value="année">Année</option>
+            <select value={orderPeriod} onChange={(e) => setOrderPeriod(e.target.value as typeof orderPeriod)} className="rounded-lg border border-[#dfe5de] bg-[#f8faf7] px-2 py-1 text-[10px] font-black outline-none">
+              <option value="jour">Jour</option><option value="semaine">Semaine</option><option value="mois">Mois</option><option value="année">Année</option>
             </select>
           </div>
           <p className="mt-4 text-4xl font-black">—</p>
           <p className="mt-2 text-xs text-[#7d897f]">Aucune donnée {periodLabels[orderPeriod]}</p>
         </div>
+      </div>
 
-        {/* Carte 4 : Compréhension IA générale */}
-        <div className="rounded-3xl bg-white p-6 shadow-sm">
-          <p className="text-xs font-bold text-[#89948b]">Compréhension IA</p>
-          <p className="mt-4 text-4xl font-black">—</p>
-          <p className="mt-2 text-xs text-[#7d897f]">Audits disponibles après conversations</p>
+      <div className="mt-6">
+        <p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">Compréhension et performance de l'assistant vocal</p>
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-3xl bg-white p-6 shadow-sm">
+            <p className="text-xs font-bold text-[#89948b]">Taux de compréhension</p>
+            <p className="mt-4 text-4xl font-black">{voiceQualityLoading ? '…' : voiceQualityError ? '—' : `${(100 - (voiceQuality?.globalRephrasingRate ?? 0)).toFixed(1)} %`}</p>
+            <p className="mt-2 text-xs text-[#7d897f]">{voiceQualityLoading ? 'Chargement…' : voiceQualityError ? voiceQualityError : `Sur ${voiceQuality?.totalConversations ?? 0} conversation(s) (30 j)`}</p>
+          </div>
+          <div className="rounded-3xl bg-white p-6 shadow-sm">
+            <p className="text-xs font-bold text-[#89948b]">Demandes reformulées</p>
+            <p className="mt-4 text-4xl font-black">{voiceQualityLoading ? '…' : voiceQualityError ? '—' : (voiceQuality?.totalRephrasingHints ?? 0)}</p>
+            <p className="mt-2 text-xs text-[#7d897f]">{voiceQualityLoading ? '' : voiceQualityError ? '' : `Sur ${voiceQuality?.totalClientMessages ?? 0} messages clients`}</p>
+          </div>
+          <div className="rounded-3xl bg-white p-6 shadow-sm">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-bold text-[#89948b]">Erreurs de catalogue</p>
+              {!voiceQualityLoading && !voiceQualityError && (voiceQuality?.catalogErrors.length ?? 0) > 0 && (
+                <button onClick={() => setCatalogErrorsOpen((v) => !v)} className="shrink-0 rounded-lg bg-[#fff0e9] px-2 py-1 text-[10px] font-black text-[#d95337]">{catalogErrorsOpen ? 'Masquer' : 'Voir le détail'}</button>
+              )}
+            </div>
+            <p className="mt-4 text-4xl font-black">{voiceQualityLoading ? '…' : voiceQualityError ? '—' : (voiceQuality?.catalogErrors.reduce((sum, r) => sum + r.errorCount, 0) ?? 0)}</p>
+            <p className="mt-2 text-xs text-[#7d897f]">{voiceQualityLoading ? 'Chargement…' : voiceQualityError ? voiceQualityError : `${voiceQuality?.catalogErrors.length ?? 0} restaurant(s) concerné(s)`}</p>
+            {catalogErrorsOpen && voiceQuality && voiceQuality.catalogErrors.length > 0 && (
+              <div className="mt-4 space-y-2 border-t border-[#edf0eb] pt-3">
+                {voiceQuality.catalogErrors.map((entry) => (
+                  <div key={entry.restaurantId} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-[#132018]">{entry.restaurantName}</span>
+                    <span className="rounded-full bg-[#fff0e9] px-2 py-0.5 text-[10px] font-black text-[#d95337]">{entry.errorCount} erreur(s)</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="rounded-3xl bg-white p-6 shadow-sm">
+            <p className="text-xs font-bold text-[#89948b]">Coût IA global</p>
+            <p className="mt-4 text-4xl font-black">{voiceQualityLoading ? '…' : voiceQualityError ? '—' : `${(voiceQuality?.globalCostEur ?? 0).toFixed(4)} €`}</p>
+            <p className="mt-2 text-xs text-[#7d897f]">Estimation 30 derniers jours</p>
+          </div>
         </div>
       </div>
     </div>
@@ -531,11 +579,15 @@ function AdminInvite({ draft, setDraft, onClose, onSubmit }: { draft: { fullName
   return <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/70 p-4"><div className="w-full max-w-lg rounded-3xl bg-white p-7 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Nouvel accès</p><h2 className="mt-2 text-2xl font-black">Ajouter un administrateur</h2><p className="mt-2 text-sm text-[#738078]">Un e-mail sécurisé sera envoyé pour créer son accès.</p></div><button onClick={onClose} className="text-2xl">×</button></div><form onSubmit={onSubmit} className="mt-7 space-y-4"><label className="block text-xs font-black text-[#68736a]">Nom complet<input required value={draft.fullName} onChange={(event) => setDraft((current) => ({ ...current, fullName: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" /></label><label className="block text-xs font-black text-[#68736a]">E-mail professionnel<input required type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" /></label><label className="block text-xs font-black text-[#68736a]">Rôle<select value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] bg-white px-4 py-3 text-sm"><option>Administrateur</option><option>Super administrateur</option><option>Analyste</option><option>Support</option></select></label><div className="flex justify-end gap-3 pt-3"><button type="button" onClick={onClose} className="rounded-xl border border-[#dfe5de] px-4 py-3 text-xs font-black">Annuler</button><button className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">Envoyer l’invitation</button></div></form></div></div>;
 }
 
-function QualityPanel() {
-  return <section><p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">Analyse IA</p><h2 className="mt-2 text-4xl font-black tracking-[-.05em]">Qualité de compréhension</h2><p className="mt-3 text-sm text-[#738078]">Les indicateurs seront calculés à partir des conversations auditées dans Supabase.</p><div className="mt-8 grid gap-4 md:grid-cols-3">{[['Taux de compréhension', '—'], ['Demandes reformulées', '—'], ['Erreurs de catalogue', '—']].map(([label, value]) => <div key={label} className="rounded-3xl bg-white p-6 shadow-sm"><p className="text-xs font-bold text-[#89948b]">{label}</p><p className="mt-4 text-4xl font-black">{value}</p><p className="mt-2 text-xs text-[#7d897f]">En attente de données d’audit</p></div>)}</div></section>;
-}
+function QualityPanel() { return null; }
 
 function CreateRestaurant({ draft, setDraft, organizations, onClose, onSubmit }: { draft: CreateRestaurantDraft; setDraft: React.Dispatch<React.SetStateAction<CreateRestaurantDraft>>; organizations: ClientOrganization[]; onClose: () => void; onSubmit: (event: React.FormEvent<HTMLFormElement>) => void }) {
-  const fields: Array<[keyof typeof draft, string, string]> = [['name', 'Nom du restaurant', 'Nom de l’établissement'], ['address', 'Adresse', '12 rue de la République'], ['city', 'Ville', 'Paris'], ['siret', 'SIRET', '12345678900000'], ['brand', 'Enseigne / groupe', 'Nom de l’enseigne'], ['phone', 'Téléphone', '+33 1 00 00 00 00'], ['managerName', 'Responsable', 'Alex Martin'], ['managerEmail', 'E-mail professionnel', 'directeur@restaurant.fr']];
-  return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-4"><div className="mx-auto my-8 max-w-2xl rounded-3xl bg-white p-7 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Nouveau client</p><h2 className="mt-2 text-2xl font-black">Créer un restaurant</h2><p className="mt-2 text-sm text-[#738078]">Rattachez-le à une organisation ou créez un nouveau compte client.</p></div><button onClick={onClose} className="text-2xl">×</button></div><form onSubmit={onSubmit} className="mt-7 grid gap-4 sm:grid-cols-2"><label className="text-xs font-black text-[#68736a] sm:col-span-2">Organisation cliente<select value={draft.organizationId} onChange={(event) => setDraft((current) => ({ ...current, organizationId: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] bg-white px-4 py-3 text-sm"><option value="">Créer une nouvelle organisation</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} · {organization.restaurants.length} restaurant(s)</option>)}</select></label>{!draft.organizationId && <label className="text-xs font-black text-[#68736a] sm:col-span-2">Nom de l’organisation<input required minLength={1} maxLength={160} value={draft.organizationName} onChange={(event) => setDraft((current) => ({ ...current, organizationName: event.target.value }))} placeholder="Société ou groupe client" className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" /></label>}{fields.map(([key, label, placeholder]) => <label key={key} className="text-xs font-black text-[#68736a]">{label}<input required={key === 'name' || key === 'managerEmail' || key === 'managerName'} type={key === 'managerEmail' ? 'email' : 'text'} value={draft[key]} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} placeholder={placeholder} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" /></label>)}<label className="text-xs font-black text-[#68736a]">Profil responsable<select value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] bg-white px-4 py-3 text-sm"><option>Directeur</option><option>Manager</option></select></label><div className="flex justify-end gap-3 sm:col-span-2"><button type="button" onClick={onClose} className="rounded-xl border border-[#dfe5de] px-4 py-3 text-xs font-black">Annuler</button><button className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">Créer et préparer l’invitation</button></div></form></div></div>;
+  const fields: Array<[keyof CreateRestaurantDraft, string, string, boolean]> = [['name', 'Nom du restaurant', 'Nom de l’établissement', true], ['address', 'Adresse', '12 rue de la République', false], ['city', 'Ville', 'Paris', false], ['siret', 'SIRET', '12345678900000', false], ['brand', 'Enseigne / groupe', 'Nom de l’enseigne', false], ['phone', 'Téléphone', '+33 1 00 00 00 00', false], ['managerName', 'Responsable', 'Alex Martin', true], ['managerEmail', 'E-mail professionnel', 'directeur@restaurant.fr', true]];
+  const posOptions: Array<[PosSystem, string, string]> = [
+    ['hubrise', 'Se connecter avec HubRise', 'Synchronisation catalogue, commandes et caisse via HubRise.'],
+    ['deliverect', 'Deliverect', 'Connexion à finaliser — intégration Deliverect en cours de déploiement.'],
+    ['direct_pos', 'Connexion directe POS/KDS', 'Connexion directe à votre caisse ou écran KDS — configuration à finaliser.'],
+  ];
+  return <div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-4"><div className="mx-auto my-8 max-w-2xl rounded-3xl bg-white p-7 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-widest text-[#ff5a36]">Nouveau client</p><h2 className="mt-2 text-2xl font-black">Créer un restaurant</h2><p className="mt-2 text-sm text-[#738078]">Rattachez-le à une organisation ou créez un nouveau compte client.</p></div><button onClick={onClose} className="text-2xl">×</button></div><form onSubmit={onSubmit} className="mt-7 grid gap-4 sm:grid-cols-2"><label className="text-xs font-black text-[#68736a] sm:col-span-2">Organisation cliente<select value={draft.organizationId} onChange={(event) => setDraft((current) => ({ ...current, organizationId: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] bg-white px-4 py-3 text-sm"><option value="">Créer une nouvelle organisation</option>{organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} · {organization.restaurants.length} restaurant(s)</option>)}</select></label>{!draft.organizationId && <label className="text-xs font-black text-[#68736a] sm:col-span-2">Nom de l’organisation<input required minLength={1} maxLength={160} value={draft.organizationName} onChange={(event) => setDraft((current) => ({ ...current, organizationName: event.target.value }))} placeholder="Société ou groupe client" className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" /></label>}{fields.map(([key, label, placeholder, required]) => <label key={key} className="text-xs font-black text-[#68736a]">{label}<input required={required} type={key === 'managerEmail' ? 'email' : 'text'} value={draft[key] as string} onChange={(event) => setDraft((current) => ({ ...current, [key]: event.target.value }))} placeholder={placeholder} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" /></label>)}<label className="text-xs font-black text-[#68736a]">Profil responsable<select value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} className="mt-2 w-full rounded-xl border border-[#dfe5de] bg-white px-4 py-3 text-sm"><option>Directeur</option><option>Manager</option></select></label><div className="text-xs font-black text-[#68736a] sm:col-span-2"><p className="mb-3">Configuration caisse</p><div className="grid gap-3 sm:grid-cols-3">{posOptions.map(([value, label, desc]) => <button key={value} type="button" onClick={() => setDraft((current) => ({ ...current, posSystem: value }))} className={`rounded-2xl border-2 p-4 text-left transition ${draft.posSystem === value ? 'border-[#ff5a36] bg-[#fff5f2]' : 'border-[#dfe5de] bg-white hover:border-[#ff5a36]/40'}`}><p className="text-xs font-black">{label}</p><p className="mt-1 text-[10px] font-normal text-[#7d897f]">{desc}</p></button>)}</div></div><div className="flex justify-end gap-3 sm:col-span-2"><button type="button" onClick={onClose} className="rounded-xl border border-[#dfe5de] px-4 py-3 text-xs font-black">Annuler</button><button className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">Créer et préparer l’invitation</button></div></form></div></div>;
 }
+

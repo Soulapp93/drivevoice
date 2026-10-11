@@ -299,6 +299,7 @@ function SectionHeading({ eyebrow, title, description, action }: { eyebrow: stri
 }
 
 function IntegrationsPanel({ restaurantId, onCatalogSynced }: { restaurantId: string; onCatalogSynced: () => Promise<void> }) {
+  const [posSystem, setPosSystem] = useState<'hubrise' | 'deliverect' | 'direct_pos' | null>(null);
   const [testState, setTestState] = useState<'idle' | 'testing' | 'success'>('idle');
   const [hubriseState, setHubriseState] = useState<'idle' | 'connecting' | 'connected' | 'error'>('idle');
   const [hubriseMessage, setHubriseMessage] = useState('');
@@ -308,6 +309,13 @@ function IntegrationsPanel({ restaurantId, onCatalogSynced }: { restaurantId: st
   const [orderTestMessage, setOrderTestMessage] = useState('');
   const [ordersSentCount, setOrdersSentCount] = useState<number>(0);
   const [disconnecting, setDisconnecting] = useState(false);
+
+  useEffect(() => {
+    if (!supabase || !restaurantId) return;
+    supabase.from('restaurants').select('pos_system').eq('id', restaurantId).single().then(({ data }) => {
+      if (data?.pos_system) setPosSystem(data.pos_system as 'hubrise' | 'deliverect' | 'direct_pos');
+    });
+  }, [restaurantId]);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -472,8 +480,41 @@ function IntegrationsPanel({ restaurantId, onCatalogSynced }: { restaurantId: st
 
   return (
     <div>
-      <SectionHeading eyebrow="Configuration caisse" title="Connectez votre environnement restaurant" description="HubRise centralisera la liaison avec votre caisse, votre catalogue et vos flux de commande. Les identifiants restent protégés côté serveur." action={<button onClick={runTest} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">{testState === 'testing' ? 'Test en cours…' : testState === 'success' ? '✓ Connexion validée' : 'Tester le flux complet'}</button>} />
-      <section className={`${panelCard} mb-5 overflow-hidden border-[#d9e5dc]`}>
+      <SectionHeading eyebrow="Configuration caisse" title="Connectez votre environnement restaurant" description="Choisissez et configurez le système de caisse de cet établissement." action={posSystem === 'hubrise' ? <button onClick={runTest} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">{testState === 'testing' ? 'Test en cours…' : testState === 'success' ? '✓ Connexion validée' : 'Tester le flux complet'}</button> : null} />
+      {(posSystem === 'deliverect' || posSystem === 'direct_pos') && (
+        <section className={`${panelCard} mb-5 overflow-hidden border-[#d9e5dc]`}>
+          <div className="flex flex-col gap-6 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-8">
+            <div className="flex items-start gap-4">
+              <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-2xl font-black">{posSystem === 'deliverect' ? 'D' : 'P'}</span>
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-[.2em] text-[#ffc647]">Configuration enregistrée</p>
+                <h2 className="mt-2 text-2xl font-black">{posSystem === 'deliverect' ? 'Deliverect' : 'Connexion directe POS/KDS'}</h2>
+                <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/60">{posSystem === 'deliverect' ? "L\u2019int\u00e9gration Deliverect a \u00e9t\u00e9 s\u00e9lectionn\u00e9e lors de la cr\u00e9ation de ce restaurant. La connexion technique est en cours de d\u00e9ploiement \u2014 contactez l\u2019\u00e9quipe DriveVoice pour finaliser la configuration." : "Une connexion directe \u00e0 votre caisse ou \u00e9cran KDS a \u00e9t\u00e9 s\u00e9lectionn\u00e9e. Contactez l\u2019\u00e9quipe DriveVoice pour finaliser la configuration technique."}</p>
+              </div>
+            </div>
+            <div className="flex flex-col gap-3 md:items-end">
+              <span className="rounded-full bg-[#ffc647]/20 px-4 py-2 text-xs font-black text-[#ffc647]">Connexion à finaliser</span>
+            </div>
+          </div>
+          <div className="border-t border-[#e3ebe5] px-6 py-5 md:px-8">
+            <p className="mb-4 text-[10px] font-black uppercase tracking-[.18em] text-[#8a938c]">État de la connexion</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                { label: 'Caisse POS', status: 'pending', detail: 'Configuration à finaliser' },
+                { label: 'Catalogue en temps réel', status: 'pending', detail: 'En attente de connexion' },
+                { label: 'Commandes synchronisées', status: 'pending', detail: 'En attente de connexion' },
+                { label: 'Données chiffrées', status: 'active', detail: 'TLS 1.3 · AES-256' },
+              ].map((item) => (
+                <div key={item.label} className="flex items-start gap-3 rounded-xl bg-[#f7f8f5] p-4">
+                  <span className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-black ${item.status === 'active' ? 'bg-[#e5f6e9] text-[#27894a]' : 'bg-[#fff5d9] text-[#a86f00]'}`}>{item.status === 'active' ? '✓' : '◷'}</span>
+                  <div><p className="text-xs font-black text-[#132018]">{item.label}</p><p className={`mt-1 text-[10px] font-semibold ${item.status === 'active' ? 'text-[#27894a]' : 'text-[#a86f00]'}`}>{item.detail}</p></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+      {(posSystem === null || posSystem === 'hubrise') && <section className={`${panelCard} mb-5 overflow-hidden border-[#d9e5dc]`}>
         <div className="flex flex-col gap-6 bg-[#0e2418] p-6 text-white md:flex-row md:items-center md:justify-between md:p-8">
           <div className="flex items-start gap-4">
             <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-[#ff5a36] text-2xl font-black">H</span>
@@ -525,7 +566,7 @@ function IntegrationsPanel({ restaurantId, onCatalogSynced }: { restaurantId: st
             <p className="mt-4 text-[10px] font-bold text-[#8a938c]">Dernière synchronisation : {new Date(lastSync).toLocaleString('fr-FR')}</p>
           )}
         </div>
-      </section>
+      </section>}
     </div>
   );
 }
