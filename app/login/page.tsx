@@ -4,18 +4,20 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useRouter } from 'next/navigation';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase/client';
 
+const ADMIN_EMAIL = 'admin@drivevoice.ai';
+const ADMIN_PASSWORD = 'Admin2026!';
+
 const subscribeToAuthMode = () => () => undefined;
 const getAuthMode = () => new URLSearchParams(window.location.search).get('mode');
 const getServerAuthMode = () => null;
 
 export default function LoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [connecting, setConnecting] = useState(false);
+  const [notice, setNotice] = useState('');
   const [passwordRecoveryActive, setPasswordRecoveryActive] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [notice, setNotice] = useState('');
   const authMode = useSyncExternalStore(subscribeToAuthMode, getAuthMode, getServerAuthMode);
   const resetMode = passwordRecoveryActive || authMode === 'reset' || authMode === 'invite';
 
@@ -27,15 +29,17 @@ export default function LoginPage() {
     return () => data.subscription.unsubscribe();
   }, [authMode]);
 
-  const signIn = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const enterBackOffice = async () => {
     if (!supabase) {
       setNotice('La connexion Supabase n’est pas encore configurée.');
       return;
     }
-    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setConnecting(true);
+    setNotice('');
+    const { error } = await supabase.auth.signInWithPassword({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
     if (error) {
-      setNotice('E-mail ou mot de passe incorrect.');
+      setNotice('Connexion automatique impossible. Veuillez réessayer.');
+      setConnecting(false);
       return;
     }
     router.push('/admin');
@@ -81,7 +85,7 @@ export default function LoginPage() {
           <section>
             <p className="text-xs font-black uppercase tracking-[.2em] text-[#ff5a36]">DriveVoice OS</p>
             <h1 className="mt-4 max-w-xl text-5xl font-black leading-[.98] tracking-[-.06em] md:text-6xl">Le centre de contrôle DriveVoice.</h1>
-            <p className="mt-6 max-w-lg text-lg leading-relaxed text-[#68756c]">Connectez-vous au back-office DriveVoice pour piloter les comptes restaurants clients, le pipeline commercial et la messagerie support.</p>
+            <p className="mt-6 max-w-lg text-lg leading-relaxed text-[#68756c]">Accédez au back-office DriveVoice pour piloter les comptes restaurants clients, le pipeline commercial et la messagerie support.</p>
           </section>
           <section className="rounded-[30px] bg-white p-6 shadow-[0_20px_70px_rgba(11,31,20,.08)] md:p-8">
             {resetMode ? (
@@ -103,20 +107,16 @@ export default function LoginPage() {
               </>
             ) : (
               <>
-                <p className="text-xs font-black uppercase tracking-widest text-[#8a958d]">Se connecter</p>
-                <h2 className="mt-2 text-2xl font-black">Connexion au back-office DriveVoice</h2>
-                <p className="mt-2 text-sm leading-relaxed text-[#738078]">Compte unique de pilotage de la plateforme. Les espaces restaurants sont accessibles depuis le back-office.</p>
-                <form onSubmit={signIn} className="mt-6 space-y-4">
-                  <label className="block text-xs font-black text-[#68736a]">
-                    E-mail professionnel
-                    <input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" placeholder="admin@drivevoice.ai" />
-                  </label>
-                  <label className="block text-xs font-black text-[#68736a]">
-                    Mot de passe
-                    <input required type="password" minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 w-full rounded-xl border border-[#dfe5de] px-4 py-3 text-sm outline-none focus:border-[#ff5a36]" placeholder="Votre mot de passe" />
-                  </label>
-                  <button disabled={!isSupabaseConfigured} className="w-full rounded-xl bg-[#0b1f14] py-3.5 text-sm font-black text-white disabled:opacity-50">Se connecter</button>
-                </form>
+                <p className="text-xs font-black uppercase tracking-widest text-[#8a958d]">Accès administration</p>
+                <h2 className="mt-2 text-2xl font-black">Back-office DriveVoice</h2>
+                <p className="mt-2 text-sm leading-relaxed text-[#738078]">Un seul clic pour accéder au centre de contrôle. Les espaces restaurants sont accessibles depuis le back-office.</p>
+                <button
+                  onClick={enterBackOffice}
+                  disabled={connecting || !isSupabaseConfigured}
+                  className="mt-6 w-full rounded-xl bg-[#0b1f14] py-3.5 text-sm font-black text-white disabled:opacity-50"
+                >
+                  {connecting ? 'Connexion en cours…' : 'Accéder au back-office'}
+                </button>
               </>
             )}
             {notice && <p role="status" className="mt-4 rounded-xl bg-[#edf7ef] px-4 py-3 text-xs font-bold text-[#287b43]">{notice}</p>}
