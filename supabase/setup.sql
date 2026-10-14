@@ -112,7 +112,25 @@ create table if not exists public.restaurant_hubrise_connections (
 create index if not exists idx_hubrise_connections_restaurant on public.restaurant_hubrise_connections (restaurant_id);
 
 -- ============================================================
--- 5) ÉTAT DE CONVERSATION ET IDEMPOTENCE REALTIME
+-- 5) CONFIGURATION DES MENUS PAR TAILLE
+--    Stocke les accompagnements, sauces et boissons par taille
+-- ============================================================
+create table if not exists public.menu_configurations (
+  id         uuid primary key default gen_random_uuid(),
+  brand_id   uuid not null references public.master_brands(id) on delete cascade,
+  size_name  text not null,
+  sides      jsonb not null default '[]'::jsonb,
+  sauces     jsonb not null default '[]'::jsonb,
+  drinks     jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (brand_id, size_name)
+);
+
+create index if not exists idx_menu_configurations_brand on public.menu_configurations (brand_id);
+
+-- ============================================================
+-- 6) ÉTAT DE CONVERSATION ET IDEMPOTENCE REALTIME
 --    Les écritures passent par les routes serveur avec la service role.
 -- ============================================================
 create table if not exists public.conversation_baskets (

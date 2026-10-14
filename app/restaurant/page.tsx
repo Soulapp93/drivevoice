@@ -882,7 +882,7 @@ function RestaurantProductEditor({ draft, setDraft, categories, subcategoryOptio
         imageUrl: current.imageUrl || product.imageUrl || '',
         emoji: product.emoji || current.emoji,
         detail: current.detail.trim() ? current.detail : product.detail,
-        ingredients: current.ingredients.length === 0 ? [...product.ingredients] : current.ingredients,
+        ingredients: current.ingredients.length === 0 ? (product.ingredients ?? []).map((name, index) => ({ id: Date.now() + index, name, removable: !/pain/i.test(name), extraAllowed: !/pain|sauce/i.test(name), extraPrice: 0 })) : current.ingredients,
         optionGroups: nextGroups,
       };
     });
@@ -1865,6 +1865,336 @@ function IngredientProductEditor({ draft, setDraft, categories, catalogProducts,
   </div>;
 }
 
+type MenuConfigItem = { name: string; priceDelta: number; posCode: string };
+type MenuSizeConfig = { sizeName: string; sides: MenuConfigItem[]; sauces: MenuConfigItem[]; drinks: MenuConfigItem[] };
+
+// Fonctions utilitaires pour la gestion des tailles de menu
+const sizeMatches = (availableFor: string[] | undefined, selectedSize: string): boolean => {
+  if (!availableFor || availableFor.length === 0) return true;
+  return availableFor.includes(selectedSize);
+};
+
+const priceForSize = (option: ProductOption | undefined, selectedSize: string): number => {
+  if (!option) return 0;
+  if (option.priceDeltaBySize && Object.prototype.hasOwnProperty.call(option.priceDeltaBySize, selectedSize)) {
+    return option.priceDeltaBySize[selectedSize] ?? 0;
+  }
+  return option.priceDelta ?? 0;
+};
+
+const menuSizeSurcharge = (productName: string, sizeName: string): number => {
+  // Surcharge par défaut selon la taille
+  if (sizeName === 'Medium' || sizeName === 'M') return 0;
+  if (sizeName === 'Large' || sizeName === 'King' || sizeName === 'King Size' || sizeName === 'XXL' || sizeName === 'Extra') return 2.6;
+  return 0;
+};
+
+function MenuConfigurationPanel({ brandId }: { brandId: string }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
+  const [sizes, setSizes] = useState<MenuSizeConfig[]>([]);
+  const [newSizeName, setNewSizeName] = useState('');
+  const [newSideName, setNewSideName] = useState<Record<string, string>>({});
+  const [newSauceName, setNewSauceName] = useState<Record<string, string>>({});
+  const [newDrinkName, setNewDrinkName] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/restaurant-menu-config?brandId=${encodeURIComponent(brandId)}`);
+        const data = await response.json() as { configurations?: Array<{ sizeName: string; sides: MenuConfigItem[]; sauces: MenuConfigItem[]; drinks: MenuConfigItem[] }> };
+        if (!active) return;
+        if (data.configurations && data.configurations.length > 0) {
+          setSizes(data.configurations.map(c => ({ sizeName: c.sizeName, sides: c.sides, sauces: c.sauces || [], drinks: c.drinks })));
+        } else {
+          setSizes([
+            { sizeName: 'Medium', sides: [], sauces: [], drinks: [] },
+            { sizeName: 'Large', sides: [], sauces: [], drinks: [] },
+          ]);
+        }
+      } catch {
+        if (!active) return;
+        setSizes([
+          { sizeName: 'Medium', sides: [], sauces: [], drinks: [] },
+          { sizeName: 'Large', sides: [], sauces: [], drinks: [] },
+        ]);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void load();
+    return () => { active = false; };
+  }, [brandId]);
+
+  const saveSize = async (sizeName: string, sides: MenuConfigItem[], sauces: MenuConfigItem[], drinks: MenuConfigItem[]) => {
+    setSaving(sizeName);
+    try {
+      const response = await fetch('/api/restaurant-menu-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brandId, sizeName, sides, sauces, drinks }),
+      });
+      const data = await response.json() as { ok?: boolean; error?: string };
+      if (data.ok) {
+        setNotice(`Configuration ${sizeName} enregistree`);
+        window.setTimeout(() => setNotice(''), 3000);
+      } else {
+        setNotice(`${data.error || 'Erreur'}`);
+      }
+    } catch {
+      setNotice('Erreur de sauvegarde');
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const addSize = () => {
+    const trimmed = newSizeName.trim();
+    if (!trimmed) return;
+    if (sizes.some(s => s.sizeName.toLowerCase() === trimmed.toLowerCase())) {
+      setNotice('Cette taille existe deja');
+      window.setTimeout(() => setNotice(''), 3000);
+      return;
+    }
+    const newSizes = [...sizes, { sizeName: trimmed, sides: [], sauces: [], drinks: [] }];
+    setSizes(newSizes);
+    setNewSizeName('');
+    void saveSize(trimmed, [], [], []);
+  };
+
+  const removeSize = async (sizeName: string) => {
+    if (!window.confirm(`Supprimer la configuration ${sizeName} ?`)) return;
+    try {
+      const response = await fetch(`/api/restaurant-menu-config?brandId=${encodeURIComponent(brandId)}&sizeName=${encodeURIComponent(sizeName)}`, { method: 'DELETE' });
+      const data = await response.json() as { ok?: boolean };
+      if (data.ok) {
+        setSizes(sizes.filter(s => s.sizeName !== sizeName));
+        setNotice(`Configuration ${sizeName} supprimee`);
+        window.setTimeout(() => setNotice(''), 3000);
+      }
+    } catch {
+      setNotice('Erreur de suppression');
+    }
+  };
+
+  const addSide = (sizeName: string) => {
+    const name = (newSideName[sizeName] || '').trim();
+    if (!name) return;
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newSides = [...s.sides, { name, priceDelta: 0, posCode: '' }];
+      void saveSize(sizeName, newSides, s.sauces, s.drinks);
+      return { ...s, sides: newSides };
+    });
+    setSizes(updated);
+    setNewSideName({ ...newSideName, [sizeName]: '' });
+  };
+
+  const removeSide = (sizeName: string, index: number) => {
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newSides = s.sides.filter((_, i) => i !== index);
+      void saveSize(sizeName, newSides, s.sauces, s.drinks);
+      return { ...s, sides: newSides };
+    });
+    setSizes(updated);
+  };
+
+  const updateSide = (sizeName: string, index: number, patch: Partial<MenuConfigItem>) => {
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newSides = s.sides.map((side, i) => i === index ? { ...side, ...patch } : side);
+      void saveSize(sizeName, newSides, s.sauces, s.drinks);
+      return { ...s, sides: newSides };
+    });
+    setSizes(updated);
+  };
+
+  const addSauce = (sizeName: string) => {
+    const name = (newSauceName[sizeName] || '').trim();
+    if (!name) return;
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newSauces = [...s.sauces, { name, priceDelta: 0, posCode: '' }];
+      void saveSize(sizeName, s.sides, newSauces, s.drinks);
+      return { ...s, sauces: newSauces };
+    });
+    setSizes(updated);
+    setNewSauceName({ ...newSauceName, [sizeName]: '' });
+  };
+
+  const removeSauce = (sizeName: string, index: number) => {
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newSauces = s.sauces.filter((_, i) => i !== index);
+      void saveSize(sizeName, s.sides, newSauces, s.drinks);
+      return { ...s, sauces: newSauces };
+    });
+    setSizes(updated);
+  };
+
+  const updateSauce = (sizeName: string, index: number, patch: Partial<MenuConfigItem>) => {
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newSauces = s.sauces.map((sauce, i) => i === index ? { ...sauce, ...patch } : sauce);
+      void saveSize(sizeName, s.sides, newSauces, s.drinks);
+      return { ...s, sauces: newSauces };
+    });
+    setSizes(updated);
+  };
+
+  const addDrink = (sizeName: string) => {
+    const name = (newDrinkName[sizeName] || '').trim();
+    if (!name) return;
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newDrinks = [...s.drinks, { name, priceDelta: 0, posCode: '' }];
+      void saveSize(sizeName, s.sides, s.sauces, newDrinks);
+      return { ...s, drinks: newDrinks };
+    });
+    setSizes(updated);
+    setNewDrinkName({ ...newDrinkName, [sizeName]: '' });
+  };
+
+  const removeDrink = (sizeName: string, index: number) => {
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newDrinks = s.drinks.filter((_, i) => i !== index);
+      void saveSize(sizeName, s.sides, s.sauces, newDrinks);
+      return { ...s, drinks: newDrinks };
+    });
+    setSizes(updated);
+  };
+
+  const updateDrink = (sizeName: string, index: number, patch: Partial<MenuConfigItem>) => {
+    const updated = sizes.map(s => {
+      if (s.sizeName !== sizeName) return s;
+      const newDrinks = s.drinks.map((drink, i) => i === index ? { ...drink, ...patch } : drink);
+      void saveSize(sizeName, s.sides, s.sauces, newDrinks);
+      return { ...s, drinks: newDrinks };
+    });
+    setSizes(updated);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <p className="text-sm font-bold text-[#7f8981]">Chargement de la configuration…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-5">
+        <p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">Configuration globale</p>
+        <h3 className="mt-1 text-xl font-black">Configuration des menus par taille</h3>
+        <p className="mt-1 text-xs text-[#7f8981]">Definissez les accompagnements, sauces et boissons disponibles pour chaque taille de menu.</p>
+      </div>
+      {notice && (
+        <div className={`mb-5 rounded-2xl px-5 py-4 text-xs font-black ${notice.startsWith('Configuration') ? 'border border-[#bee4c9] bg-[#e8f8ed] text-[#257c43]' : 'border border-[#f0b8b8] bg-[#fdecec] text-[#c0392b]'}`}>
+          {notice}
+        </div>
+      )}
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <input
+          className={fieldClass}
+          placeholder="Nouvelle taille (ex. XL, King)"
+          value={newSizeName}
+          onChange={e => setNewSizeName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') addSize(); }}
+        />
+        <button onClick={addSize} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">
+          + Ajouter une taille
+        </button>
+      </div>
+      <div className="space-y-5">
+        {sizes.map(size => (
+          <section key={size.sizeName} className={`${panelCard} p-5`}>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">Taille</p>
+                <h3 className="mt-1 text-xl font-black">{size.sizeName}</h3>
+              </div>
+              <button
+                onClick={() => removeSize(size.sizeName)}
+                className="rounded-xl bg-[#fff0ec] px-4 py-2 text-xs font-black text-[#d6503d]"
+              >
+                Supprimer
+              </button>
+            </div>
+            <div className="grid gap-5 md:grid-cols-3">
+              <div>
+                <p className="mb-3 text-xs font-black text-[#68736a]">Accompagnements ({size.sides.length})</p>
+                <div className="space-y-2">
+                  {size.sides.map((side, idx) => (
+                    <div key={idx} className="grid gap-2 rounded-xl border border-[#e5e9e2] bg-[#fafbf8] p-3">
+                      <input className={fieldClass} value={side.name} onChange={e => updateSide(size.sizeName, idx, { name: e.target.value })} placeholder="Nom" />
+                      <input className={fieldClass} type="number" step="0.1" value={side.priceDelta} onChange={e => updateSide(size.sizeName, idx, { priceDelta: Number(e.target.value) })} placeholder="Suppl. EUR" />
+                      <input className={`${fieldClass} font-mono`} value={side.posCode} onChange={e => updateSide(size.sizeName, idx, { posCode: e.target.value })} placeholder="Code POS" />
+                      <button onClick={() => removeSide(size.sizeName, idx)} className="text-[#d6503d]">×</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <input className={fieldClass} placeholder="Nouvel accompagnement" value={newSideName[size.sizeName] || ''} onChange={e => setNewSideName({ ...newSideName, [size.sizeName]: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') addSide(size.sizeName); }} />
+                  <button onClick={() => addSide(size.sizeName)} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 text-xs font-black text-white">+</button>
+                </div>
+              </div>
+              <div>
+                <p className="mb-3 text-xs font-black text-[#68736a]">Sauces ({size.sauces.length})</p>
+                <div className="space-y-2">
+                  {size.sauces.map((sauce, idx) => (
+                    <div key={idx} className="grid gap-2 rounded-xl border border-[#e5e9e2] bg-[#fafbf8] p-3">
+                      <input className={fieldClass} value={sauce.name} onChange={e => updateSauce(size.sizeName, idx, { name: e.target.value })} placeholder="Nom" />
+                      <input className={fieldClass} type="number" step="0.1" value={sauce.priceDelta} onChange={e => updateSauce(size.sizeName, idx, { priceDelta: Number(e.target.value) })} placeholder="Suppl. EUR" />
+                      <input className={`${fieldClass} font-mono`} value={sauce.posCode} onChange={e => updateSauce(size.sizeName, idx, { posCode: e.target.value })} placeholder="Code POS" />
+                      <button onClick={() => removeSauce(size.sizeName, idx)} className="text-[#d6503d]">×</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <input className={fieldClass} placeholder="Nouvelle sauce" value={newSauceName[size.sizeName] || ''} onChange={e => setNewSauceName({ ...newSauceName, [size.sizeName]: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') addSauce(size.sizeName); }} />
+                  <button onClick={() => addSauce(size.sizeName)} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 text-xs font-black text-white">+</button>
+                </div>
+              </div>
+              <div>
+                <p className="mb-3 text-xs font-black text-[#68736a]">Boissons ({size.drinks.length})</p>
+                <div className="space-y-2">
+                  {size.drinks.map((drink, idx) => (
+                    <div key={idx} className="grid gap-2 rounded-xl border border-[#e5e9e2] bg-[#fafbf8] p-3">
+                      <input className={fieldClass} value={drink.name} onChange={e => updateDrink(size.sizeName, idx, { name: e.target.value })} placeholder="Nom" />
+                      <input className={fieldClass} type="number" step="0.1" value={drink.priceDelta} onChange={e => updateDrink(size.sizeName, idx, { priceDelta: Number(e.target.value) })} placeholder="Suppl. EUR" />
+                      <input className={`${fieldClass} font-mono`} value={drink.posCode} onChange={e => updateDrink(size.sizeName, idx, { posCode: e.target.value })} placeholder="Code POS" />
+                      <button onClick={() => removeDrink(size.sizeName, idx)} className="text-[#d6503d]">×</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <input className={fieldClass} placeholder="Nouvelle boisson" value={newDrinkName[size.sizeName] || ''} onChange={e => setNewDrinkName({ ...newDrinkName, [size.sizeName]: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') addDrink(size.sizeName); }} />
+                  <button onClick={() => addDrink(size.sizeName)} className="shrink-0 rounded-xl bg-[#0b1f14] px-4 text-xs font-black text-white">+</button>
+                </div>
+              </div>
+            </div>
+            {saving === size.sizeName && (
+              <p className="mt-3 text-[10px] font-bold text-[#7f8981]">Enregistrement…</p>
+            )}
+          </section>
+        ))}
+      </div>
+      {sizes.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-[#d5dcd3] py-12 text-center">
+          <p className="text-sm font-black text-[#737d75]">Aucune taille configuree</p>
+          <p className="mt-1 text-xs text-[#969e97]">Ajoutez une taille pour commencer la configuration.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RestaurantMenuBuilderPanel({ products, setProducts, restaurantId, onPersistProduct, onDeleteProduct }: {
   products: CatalogProduct[];
   setProducts: React.Dispatch<React.SetStateAction<CatalogProduct[]>>;
@@ -1886,6 +2216,9 @@ function RestaurantMenuBuilderPanel({ products, setProducts, restaurantId, onPer
   const [notice, setNotice] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [showMenuConfig, setShowMenuConfig] = useState(false);
+  const [showBurgerSelector, setShowBurgerSelector] = useState(false);
+  const [selectedBurgerIds, setSelectedBurgerIds] = useState<Set<string>>(new Set());
   const visibleSubcategories = subcategoryTemplates[activeCategory] ?? [];
   const filteredProducts = products.filter(product => (activeCategory === 'Toutes' || product.category === activeCategory) && (activeSubcategory === 'Tous' || !visibleSubcategories.length || product.subcategory === activeSubcategory) && `${product.name} ${product.detail} ${product.posCode}`.toLowerCase().includes(query.toLowerCase()));
   const activeCount = products.filter(product => product.available).length;
@@ -2022,20 +2355,331 @@ function RestaurantMenuBuilderPanel({ products, setProducts, restaurantId, onPer
     window.setTimeout(() => setNotice(''), 2600);
   };
 
+  const generateMenusFromBurgers = () => {
+    const burgers = products.filter(p => p.category === 'Burgers' && p.available);
+    const existingMenus = products.filter(p => p.category === 'Menus' && p.productType === 'menu');
+    const burgersWithoutMenu = burgers.filter(burger =>
+      !existingMenus.some(menu => menu.name.toLowerCase().includes(burger.name.toLowerCase().split(' ')[0]))
+    );
+
+    if (burgersWithoutMenu.length === 0) {
+      setNotice('Tous les burgers ont déjà un menu associé.');
+      window.setTimeout(() => setNotice(''), 3000);
+      return;
+    }
+
+    setSelectedBurgerIds(new Set(burgersWithoutMenu.map(b => b.productId)));
+    setShowBurgerSelector(true);
+  };
+
+  const confirmGenerateMenus = async () => {
+    const burgers = products.filter(p => p.category === 'Burgers' && p.available);
+    const existingMenus = products.filter(p => p.category === 'Menus' && p.productType === 'menu');
+    const burgersWithoutMenu = burgers.filter(burger =>
+      !existingMenus.some(menu => menu.name.toLowerCase().includes(burger.name.toLowerCase().split(' ')[0]))
+    );
+    const selectedBurgers = burgersWithoutMenu.filter(b => selectedBurgerIds.has(b.productId));
+
+    if (selectedBurgers.length === 0) {
+      setNotice('Aucun burger sélectionné.');
+      window.setTimeout(() => setNotice(''), 3000);
+      return;
+    }
+
+    setShowBurgerSelector(false);
+
+    // Charger la configuration des menus depuis l'API
+    let menuConfig: Array<{ sizeName: string; sides: MenuConfigItem[]; sauces: MenuConfigItem[]; drinks: MenuConfigItem[] }> = [];
+    try {
+      const response = await fetch(`/api/restaurant-menu-config?brandId=${encodeURIComponent('bk')}`);
+      const data = await response.json() as { configurations?: Array<{ sizeName: string; sides: MenuConfigItem[]; sauces: MenuConfigItem[]; drinks: MenuConfigItem[] }> };
+      if (data.configurations && data.configurations.length > 0) {
+        menuConfig = data.configurations;
+      }
+    } catch {
+      // Si erreur, utiliser les valeurs par défaut
+    }
+
+    // Valeurs par défaut si aucune configuration n'existe
+    const defaultSideOptionsMedium: MenuConfigItem[] = [
+      { name: '6 Onion Rings', priceDelta: 0, posCode: '' },
+      { name: 'Petite salade', priceDelta: 0, posCode: '' },
+      { name: 'Moyenne frite', priceDelta: 0, posCode: '' },
+    ];
+    const defaultSideOptionsLarge: MenuConfigItem[] = [
+      { name: '9 Onion Rings', priceDelta: 0, posCode: '' },
+      { name: 'Grande frite', priceDelta: 0, posCode: '' },
+    ];
+    const defaultDrinkOptionsMedium: MenuConfigItem[] = [
+      { name: 'Coca-Cola® (40cl)', priceDelta: 0, posCode: '' },
+      { name: 'Coca-Cola® Zéro Sucres (40cl)', priceDelta: 0, posCode: '' },
+      { name: 'Fanta (40cl)', priceDelta: 0, posCode: '' },
+    ];
+    const defaultDrinkOptionsLarge: MenuConfigItem[] = [
+      { name: 'Coca-Cola® (50cl)', priceDelta: 0, posCode: '' },
+      { name: 'Coca-Cola® Zéro Sucres (50cl)', priceDelta: 0, posCode: '' },
+      { name: 'Fanta (50cl)', priceDelta: 0, posCode: '' },
+    ];
+
+    const getConfigForSize = (sizeName: string) => {
+      const config = menuConfig.find(c => c.sizeName === sizeName);
+      if (config) {
+        return { sides: config.sides, sauces: config.sauces || [], drinks: config.drinks };
+      }
+      if (sizeName === 'Medium') return { sides: defaultSideOptionsMedium, sauces: [] as MenuConfigItem[], drinks: defaultDrinkOptionsMedium };
+      if (sizeName === 'Large') return { sides: defaultSideOptionsLarge, sauces: [] as MenuConfigItem[], drinks: defaultDrinkOptionsLarge };
+      return { sides: [], sauces: [] as MenuConfigItem[], drinks: [] };
+    };
+
+    const newMenus: CatalogProduct[] = [];
+    let baseId = Date.now();
+
+    const sizesToUse = menuConfig.length > 0
+      ? menuConfig.map(c => c.sizeName)
+      : ['Medium', 'Large'];
+
+    for (const burger of selectedBurgers) {
+      const menuPrice = burger.price + 2;
+      const optionGroups: ProductOptionGroup[] = [
+        {
+          id: baseId++,
+          name: 'Taille du menu',
+          question: 'Quelle taille de menu souhaitez-vous ?',
+          required: true,
+          min: 1,
+          max: 1,
+          options: sizesToUse.map((sizeName, idx) => ({
+            id: baseId + idx,
+            name: sizeName,
+            priceDelta: sizeName === 'Medium' ? 0 : 2.6,
+            posCode: '',
+            available: true,
+          })),
+        },
+        {
+          id: baseId++,
+          name: 'Burger',
+          question: 'Quel burger souhaitez-vous ?',
+          required: true,
+          min: 1,
+          max: 1,
+          options: [{
+            id: baseId++,
+            name: burger.name,
+            priceDelta: 0,
+            posCode: burger.posCode,
+            available: true,
+            detail: burger.detail,
+            imageUrl: burger.imageUrl,
+          }],
+        },
+      ];
+
+      sizesToUse.forEach((sizeName, sizeIndex) => {
+        const config = getConfigForSize(sizeName);
+        const offset = sizeIndex * 100;
+
+        if (config.sides.length > 0) {
+          optionGroups.push({
+            id: baseId++,
+            name: `Accompagnements ${sizeName}`,
+            question: 'Quel accompagnement souhaitez-vous ?',
+            required: true,
+            min: 1,
+            max: 1,
+            sizeScope: sizeName,
+            options: config.sides.map((side, idx) => ({
+              id: baseId + offset + idx,
+              name: side.name,
+              priceDelta: side.priceDelta,
+              posCode: side.posCode || '',
+              available: true,
+            })),
+          });
+        }
+
+        if (config.sauces.length > 0) {
+          optionGroups.push({
+            id: baseId++,
+            name: `Sauces ${sizeName}`,
+            question: 'Quelle sauce souhaitez-vous ?',
+            required: false,
+            min: 0,
+            max: 1,
+            sizeScope: sizeName,
+            options: config.sauces.map((sauce, idx) => ({
+              id: baseId + offset + 25 + idx,
+              name: sauce.name,
+              priceDelta: sauce.priceDelta,
+              posCode: sauce.posCode || '',
+              available: true,
+            })),
+          });
+        }
+
+        if (config.drinks.length > 0) {
+          optionGroups.push({
+            id: baseId++,
+            name: `Boissons ${sizeName}`,
+            question: 'Quelle boisson souhaitez-vous ?',
+            required: true,
+            min: 1,
+            max: 1,
+            sizeScope: sizeName,
+            options: config.drinks.map((drink, idx) => ({
+              id: baseId + offset + 50 + idx,
+              name: drink.name,
+              priceDelta: drink.priceDelta,
+              posCode: drink.posCode || '',
+              available: true,
+            })),
+          });
+        }
+      });
+
+      const newMenu: CatalogProduct = {
+        id: baseId++,
+        productId: `restaurant_${restaurantId}_menu_${burger.productId}`,
+        name: `Menu ${burger.name}`,
+        mainProduct: burger.name,
+        detail: burger.detail,
+        category: 'Menus',
+        subcategory: 'Burgers',
+        price: menuPrice,
+        posCode: `MENU-${burger.posCode || burger.name.substring(0, 3).toUpperCase()}`,
+        emoji: burger.emoji,
+        imageUrl: burger.imageUrl,
+        ingredients: burger.ingredients ?? [],
+        ingredientSettings: burger.ingredientSettings ?? [],
+        available: true,
+        productType: 'menu',
+        variants: [],
+        optionGroups,
+        modifiers: [],
+        slug: `menu-${burger.slug || burger.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')}`,
+        meatFilter: burger.meatFilter,
+        badges: burger.badges,
+        ingredientImages: burger.ingredientImages,
+        allergens: burger.allergens,
+        traces: burger.traces,
+        displayOrder: burger.displayOrder,
+        nutrition: burger.nutrition,
+      };
+
+      newMenus.push(newMenu);
+    }
+
+    setIsSaving(true);
+    const results = await Promise.all(newMenus.map(menu => onPersistProduct ? onPersistProduct(menu) : Promise.resolve({ ok: true })));
+    setIsSaving(false);
+
+    const failed = results.filter(r => !r.ok);
+    if (failed.length > 0) {
+      setNotice(`⚠️ ${failed.length} menu(s) n'ont pas pu être sauvegardés.`);
+    } else {
+      setProducts(current => [...current, ...newMenus]);
+      setPublished(false);
+      setNotice(`✓ ${newMenus.length} menu(s) créé(s) automatiquement.`);
+    }
+    window.setTimeout(() => setNotice(''), 4000);
+  };
+
   return (
     <div>
       {productEditor!==null&&<RestaurantProductEditor draft={productDraft} setDraft={setProductDraft} categories={categories} subcategoryOptions={subcategoryTemplates[productDraft.category]??[]} catalogProducts={products} onClose={()=>setProductEditor(null)} onSave={saveProduct} isSaving={isSaving} isNew={productEditor==='new'} onDelete={typeof productEditor==='number'?async()=>{if(!window.confirm('Supprimer définitivement ce produit ?'))return;const product=products.find(item=>item.id===productEditor);if(onDeleteProduct&&product){const result=await onDeleteProduct(product.productId);if(!result.ok){setNotice(`⚠️ ${result.error??'Suppression impossible.'}`);return;}}setProducts(current=>current.filter(item=>item.id!==productEditor));setProductEditor(null);setPublished(false);}:undefined} />}
-      <SectionHeading eyebrow="Configuration restaurant" title="Carte du restaurant" description="Créez librement les catégories et produits de votre enseigne. Cette carte validée devient l'unique source utilisée par l'agent IA pour les produits, prix et compositions." action={<div className="flex flex-wrap gap-2"><button onClick={publishCatalog} disabled={published} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:bg-[#dce1db] disabled:text-[#7c857e]">{published ? '✓ Carte publiée' : 'Publier la carte'}</button></div>} />
+      <SectionHeading eyebrow="Configuration restaurant" title="Carte du restaurant" description="Créez librement les catégories et produits de votre enseigne. Cette carte validée devient l'unique source utilisée par l'agent IA pour les produits, prix et compositions." action={<div className="flex flex-wrap gap-2"><button onClick={() => setShowMenuConfig(!showMenuConfig)} className="rounded-xl border-2 border-[#ff5a36] bg-white px-5 py-3 text-xs font-black text-[#ff5a36] hover:bg-[#fff5f2]">{showMenuConfig ? 'Fermer configuration' : 'Configuration des menus'}</button><button onClick={publishCatalog} disabled={published} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:bg-[#dce1db] disabled:text-[#7c857e]">{published ? 'Carte publiee' : 'Publier la carte'}</button></div>} />
+      {showMenuConfig && <div className="mb-6"><MenuConfigurationPanel brandId="bk" /></div>}
       {notice&&<div className="mb-4 rounded-2xl border border-[#bee4c9] bg-[#e8f8ed] px-5 py-4 text-xs font-black text-[#257c43]">{notice}</div>}
       <div className="mb-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{[['Version active','v1.4','Publiée aujourd’hui'],['Catégories',String(categories.length),'Structure personnalisée'],['Produits',String(products.length),`${activeCount} disponibles`],['État',published?'À jour':'Brouillon',published?'Agent synchronisé':'Modifications à publier']].map(([label,value,detail])=><div key={label} className={`${panelCard} p-4`}><p className="text-[10px] font-black uppercase tracking-wider text-[#929a93]">{label}</p><p className="mt-2 text-xl font-black">{value}</p><p className={`mt-1 text-[10px] font-bold ${label==='État'&&!published?'text-[#d17a17]':'text-[#778178]'}`}>{detail}</p></div>)}</div>
       {visibleSubcategories.length>0&&<div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-[#e2e6df] bg-white p-3"><span className="mr-1 text-[9px] font-black uppercase tracking-wider text-[#919991]">Sous-catégories</span>{visibleSubcategories.map(subcategory=><button key={subcategory} onClick={()=>setActiveSubcategory(subcategory)} className={`rounded-full border px-4 py-2 text-[10px] font-black transition ${activeSubcategory===subcategory?'border-[#ff5a36] bg-[#ff5a36] text-white':'border-[#dce2da] bg-white text-[#657068] hover:border-[#ff9e87]'}`}>{subcategory} <span className="ml-1 opacity-60">{subcategory==='Tous'?products.filter(product=>product.category===activeCategory).length:products.filter(product=>product.category===activeCategory&&product.subcategory===subcategory).length}</span></button>)}</div>}
       <section className={`${panelCard} grid min-h-[650px] overflow-hidden xl:grid-cols-[250px_1fr]`}>
         <aside className="border-b border-[#e5e9e2] bg-[#f8f9f6] p-4 xl:border-b-0 xl:border-r"><div className="flex items-center justify-between px-2 py-2"><div><p className="text-[10px] font-black uppercase tracking-wider text-[#8c958d]">Organisation</p><h2 className="mt-1 text-lg font-black">Catégories</h2></div><button onClick={()=>openCategoryEditor()} aria-label="Créer une catégorie" className="grid h-9 w-9 place-items-center rounded-xl bg-[#0b1f14] text-lg font-black text-white">＋</button></div><div className="mt-3 space-y-1"><button onClick={()=>setActiveCategory('Toutes')} className={`flex w-full items-center justify-between rounded-xl px-3 py-3 text-left text-xs font-black ${activeCategory==='Toutes'?'bg-white shadow-sm text-[#ff5a36]':'text-[#687169]'}`}><span>▦ Toutes les catégories</span><span>{products.length}</span></button>{categories.map(category=>{const count=products.filter(product=>product.category===category.name).length;return <div key={category.id} className={`group flex items-center rounded-xl ${activeCategory===category.name?'bg-white shadow-sm':'hover:bg-white/70'}`}><button onClick={()=>setActiveCategory(category.name)} className={`flex min-w-0 flex-1 items-center gap-2 px-3 py-3 text-left text-xs font-black ${activeCategory===category.name?'text-[#ff5a36]':'text-[#687169]'}`}><span>{category.icon}</span><span className="truncate">{category.name}</span><span className="ml-auto rounded-full bg-[#edf0eb] px-2 py-1 text-[9px] text-[#7c857e]">{count}</span></button><button onClick={()=>openCategoryEditor(category)} aria-label={`Modifier ${category.name}`} className="mr-1 hidden h-8 w-8 place-items-center rounded-lg text-[11px] font-black text-[#8b948c] group-hover:grid">•••</button></div>})}</div><button onClick={()=>openCategoryEditor()} className="mt-4 w-full rounded-xl border border-dashed border-[#cfd6cd] py-3 text-xs font-black text-[#ff5a36]">＋ Nouvelle catégorie</button><div className="mt-6 rounded-2xl bg-[#0b1f14] p-4 text-white"><p className="text-[9px] font-black uppercase tracking-widest text-white/45">Principe</p><p className="mt-2 text-xs font-bold leading-relaxed text-white/75">Chaque enseigne construit sa propre structure. Aucune catégorie n’est imposée par DriveVoice.</p></div></aside>
-        <main className="min-w-0 p-5 md:p-6"><div className="flex flex-col gap-4 border-b border-[#e8ebe6] pb-5 md:flex-row md:items-end md:justify-between"><div><p className="text-[10px] font-black uppercase tracking-wider text-[#ff5a36]">Produits</p><h2 className="mt-1 text-2xl font-black">{activeCategory}</h2><p className="mt-1 text-xs text-[#7f8981]">Ajoutez les produits et renseignez leur composition pour l’agent.</p></div><button onClick={()=>openProductEditor()} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">＋ Ajouter un produit</button></div><div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><input aria-label="Rechercher un produit" className={`${fieldClass} sm:max-w-sm`} placeholder="Rechercher un produit ou un code POS…" value={query} onChange={event=>setQuery(event.target.value)} /><div className="flex gap-2 text-[10px] font-black"><span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-[#28894a]">{activeCount} disponibles</span><span className="rounded-full bg-[#f0f2ef] px-3 py-2 text-[#727b73]">{products.length-activeCount} masqués</span></div></div>
+        <main className="min-w-0 p-5 md:p-6"><div className="flex flex-col gap-4 border-b border-[#e8ebe6] pb-5 md:flex-row md:items-end md:justify-between"><div><p className="text-[10px] font-black uppercase tracking-wider text-[#ff5a36]">Produits</p><h2 className="mt-1 text-2xl font-black">{activeCategory}</h2><p className="mt-1 text-xs text-[#7f8981]">Ajoutez les produits et renseignez leur composition pour l’agent.</p></div><div className="flex flex-wrap gap-2"><button onClick={()=>openProductEditor()} className="rounded-xl bg-[#0b1f14] px-5 py-3 text-xs font-black text-white">＋ Ajouter un produit</button>{activeCategory === 'Menus' && <button onClick={generateMenusFromBurgers} className="rounded-xl border-2 border-[#ff5a36] bg-white px-5 py-3 text-xs font-black text-[#ff5a36] hover:bg-[#fff5f2]">Générer les menus automatiquement</button>}</div></div><div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><input aria-label="Rechercher un produit" className={`${fieldClass} sm:max-w-sm`} placeholder="Rechercher un produit ou un code POS…" value={query} onChange={event=>setQuery(event.target.value)} /><div className="flex gap-2 text-[10px] font-black"><span className="rounded-full bg-[#e5f6e9] px-3 py-2 text-[#28894a]">{activeCount} disponibles</span><span className="rounded-full bg-[#f0f2ef] px-3 py-2 text-[#727b73]">{products.length-activeCount} masqués</span></div></div>
           {filteredProducts.length ? activeSubcategory==='Tous'&&visibleSubcategories.length>1 ? <div className="mt-6 space-y-9">{visibleSubcategories.slice(1).map(subcategory=>{const sectionProducts=filteredProducts.filter(product=>product.subcategory===subcategory);if(!sectionProducts.length)return null;return <section key={subcategory} aria-labelledby={`subcategory-${subcategory}`}><div className="mb-4 flex items-center gap-3"><button onClick={()=>setActiveSubcategory(subcategory)} className="group/title flex items-center gap-2 text-left"><h3 id={`subcategory-${subcategory}`} className="text-xl font-black tracking-[-.02em]">{subcategory}</h3><span className="rounded-full bg-[#eef2ed] px-2.5 py-1 text-[9px] font-black text-[#6f7971]">{sectionProducts.length}</span><span className="text-[10px] font-black text-[#ff5a36] opacity-0 transition group-hover/title:opacity-100">Voir seulement →</span></button><div className="h-px flex-1 bg-[#e3e7e1]" /></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">{sectionProducts.map(renderProductCard)}</div></section>;})}</div> : <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">{filteredProducts.map(renderProductCard)}</div> : <div className="mt-8 rounded-3xl border border-dashed border-[#cfd6cd] py-16 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-[#f0f3ee] text-2xl">🍽️</div><h3 className="mt-4 text-lg font-black">Aucun produit dans cette sous-catégorie</h3><p className="mt-1 text-xs text-[#858e86]">Ajoutez un produit ou choisissez une autre sous-catégorie.</p><button onClick={()=>openProductEditor()} className="mt-5 rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white">＋ Ajouter un produit</button></div>}
         </main>
       </section>
       {previewOpen&&<div className="fixed inset-0 z-50 overflow-y-auto bg-[#07130d]/70 p-3 md:p-7" role="dialog" aria-modal="true" aria-label="Prévisualisation de la carte"><div className="mx-auto min-h-[88vh] max-w-7xl overflow-hidden rounded-[28px] bg-[#f6ead8] shadow-2xl"><header className="sticky top-0 z-20 border-b border-[#dfcdb7] bg-[#fff8ed]/95 backdrop-blur"><div className="flex items-center justify-between px-5 py-4 md:px-8"><div className="flex items-center gap-3"><span className="grid h-11 w-11 place-items-center rounded-full bg-[#c83a20] text-xs font-black text-white">🍽️</span><div><p className="text-[9px] font-black uppercase tracking-[.18em] text-[#9d6c52]">Prévisualisation DriveVoice</p><h2 className="text-lg font-black text-[#3c160d]">Carte du restaurant</h2></div></div><button onClick={()=>setPreviewOpen(false)} className="grid h-10 w-10 place-items-center rounded-full bg-white text-lg font-black text-[#3c160d] shadow-sm" aria-label="Fermer la prévisualisation">×</button></div><nav className="flex gap-1 overflow-x-auto px-4 pb-3 md:px-7" aria-label="Catégories de la carte"><button onClick={()=>setActiveCategory('Toutes')} className={`shrink-0 rounded-full px-4 py-2 text-[11px] font-black ${activeCategory==='Toutes'?'bg-[#c83a20] text-white':'bg-white text-[#6c3b2b]'}`}>Accueil</button>{categories.map(category=><button key={category.id} onClick={()=>setActiveCategory(category.name)} className={`shrink-0 rounded-full px-4 py-2 text-[11px] font-black ${activeCategory===category.name?'bg-[#c83a20] text-white':'bg-white text-[#6c3b2b]'}`}>{category.icon} {category.name}</button>)}</nav></header><main className="p-5 md:p-8"><div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-[10px] font-black uppercase tracking-[.2em] text-[#c83a20]">{activeCategory==='Toutes'?'Notre carte':activeCategory}</p><h3 className="mt-1 text-3xl font-black tracking-[-.04em] text-[#3c160d]">{activeCategory==='Toutes'?'Choisissez une catégorie':activeCategory}</h3></div><p className="text-[10px] font-bold text-[#8c6d5d]">Aperçu client · prix à confirmer par le restaurant</p></div>{activeCategory==='Toutes'?<div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">{categories.map(category=><button key={category.id} onClick={()=>setActiveCategory(category.name)} className="group overflow-hidden rounded-2xl bg-white text-left shadow-[0_5px_0_#e5d5c2] transition hover:-translate-y-1"><div className="grid h-36 place-items-center bg-gradient-to-br from-white to-[#f8ead6] text-6xl">{category.icon}</div><p className="border-t border-[#f0e3d3] p-4 text-center text-sm font-black text-[#3c160d]">{category.name}</p></button>)}</div>:<div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">{products.filter(product=>product.category===activeCategory).map(product=><button key={product.id} onClick={()=>{setPreviewOpen(false);openProductEditor(product);}} className="group overflow-hidden rounded-2xl bg-white text-left shadow-[0_5px_0_#e5d5c2] transition hover:-translate-y-1"><div className="relative grid h-40 place-items-center bg-gradient-to-br from-white to-[#f8ead6] text-7xl">{product.emoji}<span className="absolute right-3 top-3 rounded-full bg-[#fff3df] px-2 py-1 text-[8px] font-black text-[#8c5f42]">BROUILLON</span></div><div className="border-t border-[#f0e3d3] p-4"><h4 className="text-sm font-black text-[#3c160d]">{product.name}</h4><p className="mt-1 line-clamp-2 min-h-8 text-[10px] leading-relaxed text-[#846959]">{product.detail}</p><p className="mt-3 text-xs font-black text-[#c83a20]">{product.price>0?money.format(product.price):'Prix à définir'} <span className="float-right">Configurer →</span></p></div></button>)}</div>}</main></div></div>}
+      {showBurgerSelector && (() => {
+        const burgers = products.filter(p => p.category === 'Burgers' && p.available);
+        const existingMenus = products.filter(p => p.category === 'Menus' && p.productType === 'menu');
+        const burgersWithoutMenu = burgers.filter(burger =>
+          !existingMenus.some(menu => menu.name.toLowerCase().includes(burger.name.toLowerCase().split(' ')[0]))
+        );
+        const allSelected = burgersWithoutMenu.length > 0 && burgersWithoutMenu.every(b => selectedBurgerIds.has(b.productId));
+        return (
+          <div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/55 p-4" role="dialog" aria-modal="true" aria-label="Sélection des burgers">
+            <div className="w-full max-w-lg rounded-[28px] bg-white p-6 shadow-2xl">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">Génération automatique</p>
+                  <h2 className="mt-1 text-2xl font-black">Choisir les burgers</h2>
+                  <p className="mt-1 text-xs text-[#7f8981]">Sélectionnez les burgers pour lesquels créer un menu.</p>
+                </div>
+                <button onClick={() => setShowBurgerSelector(false)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] font-black">×</button>
+              </div>
+              <div className="mt-5 flex items-center gap-3 border-b border-[#e5e9e2] pb-3">
+                <label className="flex items-center gap-2 text-xs font-black text-[#0b1f14] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={() => {
+                      if (allSelected) {
+                        setSelectedBurgerIds(new Set());
+                      } else {
+                        setSelectedBurgerIds(new Set(burgersWithoutMenu.map(b => b.productId)));
+                      }
+                    }}
+                    className="h-4 w-4 accent-[#ff5a36]"
+                  />
+                  Tout sélectionner ({burgersWithoutMenu.length})
+                </label>
+              </div>
+              <div className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto">
+                {burgersWithoutMenu.map(burger => (
+                  <label key={burger.productId} className="flex cursor-pointer items-center gap-3 rounded-xl border border-[#e5e9e2] bg-[#fafbf8] p-3 hover:border-[#ff5a36]">
+                    <input
+                      type="checkbox"
+                      checked={selectedBurgerIds.has(burger.productId)}
+                      onChange={() => {
+                        const next = new Set(selectedBurgerIds);
+                        if (next.has(burger.productId)) {
+                          next.delete(burger.productId);
+                        } else {
+                          next.add(burger.productId);
+                        }
+                        setSelectedBurgerIds(next);
+                      }}
+                      className="h-4 w-4 accent-[#ff5a36]"
+                    />
+                    <span className="text-lg">{burger.emoji || '🍔'}</span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-black text-[#0b1f14]">{burger.name}</p>
+                      {burger.detail && <p className="truncate text-[10px] text-[#7f8981]">{burger.detail}</p>}
+                    </div>
+                    <span className="text-xs font-black text-[#ff5a36]">{burger.price > 0 ? burger.price.toFixed(2) + ' €' : ''}</span>
+                  </label>
+                ))}
+                {burgersWithoutMenu.length === 0 && (
+                  <p className="py-8 text-center text-sm font-bold text-[#7f8981]">Aucun burger sans menu.</p>
+                )}
+              </div>
+              <div className="mt-5 flex items-center justify-between">
+                <p className="text-[10px] font-bold text-[#7f8981]">{selectedBurgerIds.size} burger(s) sélectionné(s)</p>
+                <div className="flex gap-2">
+                  <button onClick={() => setShowBurgerSelector(false)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Annuler</button>
+                  <button
+                    onClick={confirmGenerateMenus}
+                    disabled={selectedBurgerIds.size === 0}
+                    className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:opacity-40"
+                  >
+                    Générer {selectedBurgerIds.size} menu(s)
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       {categoryEditor!==null&&<div className="fixed inset-0 z-50 grid place-items-center bg-[#07130d]/55 p-4" role="dialog" aria-modal="true" aria-label="Éditeur de catégorie"><div className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-[10px] font-black uppercase tracking-widest text-[#ff5a36]">Structure de la carte</p><h2 className="mt-1 text-2xl font-black">{categoryEditor==='new'?'Nouvelle catégorie':'Modifier la catégorie'}</h2></div><button onClick={()=>setCategoryEditor(null)} className="grid h-9 w-9 place-items-center rounded-xl bg-[#f0f3ee] font-black">×</button></div><div className="mt-6 grid grid-cols-[72px_1fr] gap-3"><label className="text-xs font-bold text-[#68736a]">Icône<input className={`${fieldClass} mt-2 text-center text-xl`} maxLength={3} value={categoryDraft.icon} onChange={event=>setCategoryDraft(current=>({...current,icon:event.target.value}))} /></label><label className="text-xs font-bold text-[#68736a]">Nom de la catégorie<input className={`${fieldClass} mt-2`} placeholder="Ex. Boissons froides" value={categoryDraft.name} onChange={event=>setCategoryDraft(current=>({...current,name:event.target.value}))} /></label></div><div className="mt-6 flex items-center justify-between">{typeof categoryEditor==='number'&&<button onClick={()=>{const category=categories.find(item=>item.id===categoryEditor);if(category){removeCategory(category);setCategoryEditor(null);}}} disabled={products.some(product=>product.category===categories.find(item=>item.id===categoryEditor)?.name)} className="text-xs font-black text-[#d6503d] disabled:cursor-not-allowed disabled:text-[#b6bcb7]">Supprimer</button>}<div className="ml-auto flex gap-2"><button onClick={()=>setCategoryEditor(null)} className="rounded-xl border border-[#dfe4dc] px-4 py-3 text-xs font-black">Annuler</button><button onClick={saveCategory} disabled={!categoryDraft.name.trim()} className="rounded-xl bg-[#ff5a36] px-5 py-3 text-xs font-black text-white disabled:opacity-40">Enregistrer</button></div></div>{typeof categoryEditor==='number'&&products.some(product=>product.category===categories.find(item=>item.id===categoryEditor)?.name)&&<p className="mt-3 text-[10px] text-[#9a765f]">Déplacez d’abord les produits de cette catégorie avant de la supprimer.</p>}</div></div>}
     </div>
   );
@@ -2342,7 +2986,7 @@ function MasterMenuDetail({ product, onClose, onEdit }: { product: CatalogProduc
         <div className="space-y-6 p-5 md:p-6">
           <div className="grid gap-5 rounded-2xl border border-[#eadcca] bg-white p-4 sm:grid-cols-[180px_1fr]"><div className="grid h-40 place-items-center overflow-hidden rounded-xl bg-[#f7efe2]">{product.imageUrl ? <img src={product.imageUrl} alt={product.name} className="h-full w-full object-contain p-2" /> : <span className="text-7xl">{product.emoji}</span>}</div><div><p className="text-sm leading-relaxed text-[#624b40]">{product.detail}</p><div className="mt-4 flex flex-wrap gap-2"><span className="rounded-full bg-[#e8f7ec] px-3 py-1.5 text-[10px] font-black text-[#27894a]">✓ Menu actif pour l’agent</span><span className="rounded-full bg-[#fff1df] px-3 py-1.5 text-[10px] font-black text-[#9b5e26]">Choix dans l’ordre BK</span></div></div></div>
           <MenuChoiceSection number="1" title="Taille du menu" question={sizeGroup?.question ?? 'Quelle taille de menu souhaitez-vous ?'}>{orderedSizeOptions.map(option => { const surcharge = menuSizeSurcharge(product.name, option.name); return selectCard(option, option.name === selectedSize, () => setSelectedSize(option.name), `Prix total : ${money.format(product.price + surcharge)} · ${surcharge ? `+${money.format(surcharge)}` : 'Inclus'}`); })}</MenuChoiceSection>
-          <MenuChoiceSection number="2" title="Plat" question="Quel plat souhaitez-vous dans votre menu ?">{selectCard(dishOption, true, () => undefined, burger?.detail ? 'Composition personnalisable' : 'Plat sélectionné')}</MenuChoiceSection>
+          <MenuChoiceSection number="2" title="Plat" question="Quel plat souhaitez-vous dans votre menu ?">{selectCard(dishOption, true, () => undefined, product.detail ? 'Composition personnalisable' : 'Plat sélectionné')}</MenuChoiceSection>
           <MenuChoiceSection number="3" title="Accompagnement" question={`Options disponibles pour ${selectedSize}.`}>{visibleSides.map(option => selectCard(option, option.name === selectedSide, () => setSelectedSide(option.name)))}</MenuChoiceSection>
           <MenuChoiceSection number="4" title="Boisson" question={`Boissons disponibles pour ${selectedSize}.`}>{visibleDrinks.map(option => selectCard(option, option.name === selectedDrink, () => setSelectedDrink(option.name)))}</MenuChoiceSection>
           {ingredientRows.length > 0 && <section className="rounded-2xl border border-[#eadcca] bg-[#fffdf9] p-4"><div className="border-b border-[#decdbb] pb-3"><p className="text-[10px] font-black uppercase tracking-widest text-[#c83a20]">Composition du plat</p><h3 className="mt-1 text-lg font-black text-[#3c160d]">Personnalisez le burger du menu</h3><p className="mt-1 text-[10px] text-[#907665]">Même composition et mêmes retraits que la fiche burger.</p></div><div className="relative mt-3 overflow-hidden rounded-xl border border-[#eadcca] bg-white p-3"><div className="absolute bottom-5 left-[7.1rem] top-5 hidden border-l border-dashed border-[#d8bda4] sm:block" />{ingredientRows.map((ingredient, index) => { const isRemoved = removed.includes(ingredient.name); const isExtra = extras.includes(ingredient.name); const visual = ingredientVisual(ingredient.name); return <div key={`${ingredient.id}-${index}`} className={`relative grid grid-cols-[5.2rem_3.5rem_minmax(0,1fr)] items-center gap-3 border-b border-[#f0e5d9] py-2.5 last:border-b-0 ${isRemoved ? 'opacity-60' : ''}`}><p className={`text-right text-[10px] font-black leading-tight ${isRemoved ? 'text-[#b64228] line-through' : 'text-[#3c160d]'}`}>{ingredient.name}</p><div className="relative z-[1] grid h-12 w-12 place-items-center rounded-full border-4 border-white shadow-sm" style={{ background: visual.background }}><span className="text-xl" aria-hidden="true">{visual.icon}</span></div><div className="min-w-0"><span className="text-[9px] font-black uppercase tracking-wider text-[#a5795f]">Couche {index + 1}</span><div className="mt-1 flex flex-wrap gap-2">{ingredient.removable && <button type="button" onClick={() => setRemoved(current => current.includes(ingredient.name) ? current.filter(item => item !== ingredient.name) : [...current, ingredient.name])} className={`rounded-lg px-2 py-1 text-[9px] font-black ${isRemoved ? 'bg-[#c83a20] text-white' : 'bg-[#fff0ec] text-[#c83a20]'}`}>{isRemoved ? 'Réintégrer' : 'Retirer'}</button>}{ingredient.extraAllowed && <button type="button" onClick={() => setExtras(current => current.includes(ingredient.name) ? current.filter(item => item !== ingredient.name) : [...current, ingredient.name])} className={`rounded-lg px-2 py-1 text-[9px] font-black ${isExtra ? 'bg-[#27894a] text-white' : 'bg-[#e8f7ec] text-[#27894a]'}`}>{isExtra ? 'Supplément ajouté' : `Ajouter${ingredient.extraPrice ? ` +${money.format(ingredient.extraPrice)}` : ''}`}</button>}</div></div></div>; })}</div></section>}
