@@ -36,9 +36,19 @@ export default function LoginPage() {
     }
     setConnecting(true);
     setNotice('');
-    const { error } = await supabase.auth.signInWithPassword({ email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
+    const response = await fetch('/api/auth/direct-login', { method: 'POST', cache: 'no-store' });
+    const result = await response.json() as { accessToken?: string; refreshToken?: string; error?: string };
+    if (!response.ok || !result.accessToken || !result.refreshToken) {
+      setNotice(result.error || 'Connexion automatique impossible. Veuillez réessayer.');
+      setConnecting(false);
+      return;
+    }
+    const { error } = await supabase.auth.setSession({
+      access_token: result.accessToken,
+      refresh_token: result.refreshToken,
+    });
     if (error) {
-      setNotice('Connexion automatique impossible. Veuillez réessayer.');
+      setNotice(error.message);
       setConnecting(false);
       return;
     }
